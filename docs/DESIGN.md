@@ -1962,3 +1962,9 @@ mi の実機確認を待つ。モックはセッション要求を拒否する
   ShareCardOptions（コーデ列挙が必須）に追従していな
   かった意味的競合を解消した（VR 写真のカードにも
   コーデが載る）。
+
+## 23. VRM／GLB の外部ランタイム検証（M7、2026-11-21 統合）
+
+正本は `docs/VRM-VERIFY.md`。独立実装3系統で実測し、M7 は満たせた: @pixiv/three-vrm 3.5.5（許可 URL 指定時。meta 全項目・必須ボーン15＋chest/neck・ポーズ適用・73メッシュ全スキニング・高さ1.928m）、Blender 5.2.0＋VRM Addon 4.10.5（警告なし、ヒューマノイド17件全割当）、Godot 4.7.2＋godot-vrm 2.0.1（ヒューマノイドプロファイル名へ変換されリターゲット可能な形で取り込み）。GLB も同3系統で開けた。書き出し側の欠陥は見つからず、製品コードの修正なし。
+
+相互運用上の事実（未修正、判断材料）: `meta.licenseUrl` の CC0 証書 URL の扱いが道具で割れる。three-vrm は既定では標準外ライセンス URL を例外で拒否し読み込み全体が失敗する（利用側が `acceptLicenseUrls` を渡せば正常）。Blender アドオンは licenseUrl を読まず（otherLicenseUrl のみ）、利用条件は copyrightInformation に残る。godot-vrm は licenseUrl を表面化しない。licenseUrl の方針変更は権利表示の判断に属するため保留し、緩和策（otherLicenseUrl への併記等）は別途検討する。未検証: VRoid Hub（公開行為のため対象外）、UniVRM／Unity（環境なし）、実在ビューアでの目視。
