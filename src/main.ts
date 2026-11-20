@@ -27,6 +27,16 @@ import {
   saveOutfit,
   type Outfit,
 } from './outfit';
+import {
+  EYE_COLORS,
+  HAIR_COLORS,
+  HAIR_STYLES,
+  HEIGHT_MAX,
+  HEIGHT_MIN,
+  fitzpatrickLabel,
+  type CharacterParams,
+} from './character';
+import { decodeSeed, encodeSeed } from './seed';
 
 const LANG_KEY = 'fitting-room.lang.v1';
 const canvas = document.getElementById('gl') as HTMLCanvasElement;
@@ -35,14 +45,15 @@ setLang(detectLang(localStorage.getItem(LANG_KEY)));
 document.documentElement.lang = getLang();
 
 const stage = createStage(canvas);
-const rig = buildAvatar();
-stage.scene.add(rig.root);
-
 let outfit: Outfit = loadOutfit();
+const rig = buildAvatar(outfit.character);
+stage.scene.add(rig.root);
+stage.setSubjectHeight(outfit.character.height);
 applyOutfit(rig, outfit);
 
-type TabId = 'tops' | 'hat' | 'glasses' | 'accessory' | 'pose';
+type TabId = 'character' | 'tops' | 'hat' | 'glasses' | 'accessory' | 'pose';
 const TABS: Array<{ id: TabId; key: I18nKey }> = [
+  { id: 'character', key: 'cat.character' },
   { id: 'tops', key: 'cat.tops' },
   { id: 'hat', key: 'cat.hat' },
   { id: 'glasses', key: 'cat.glasses' },
@@ -64,9 +75,23 @@ function el<K extends keyof HTMLElementTagNameMap>(
 
 function update(next: Outfit): void {
   outfit = next;
+  rig.setCharacter(outfit.character);
+  stage.setSubjectHeight(outfit.character.height);
   applyOutfit(rig, outfit);
   saveOutfit(outfit);
   renderOptions();
+}
+
+/** Live character patch for sliders: applies and persists without
+ *  re-rendering the panel, so the dragged slider is never destroyed
+ *  mid-gesture. The seed readout (if visible) is refreshed in place. */
+function patchCharacter(patch: Partial<CharacterParams>): void {
+  outfit = { ...outfit, character: { ...outfit.character, ...patch } };
+  rig.setCharacter(outfit.character);
+  stage.setSubjectHeight(outfit.character.height);
+  saveOutfit(outfit);
+  const seedEl = document.getElementById('seed-value');
+  if (seedEl) seedEl.textContent = encodeSeed(outfit);
 }
 
 function chip(label: string, selected: boolean, onClick: () => void): HTMLButtonElement {
@@ -99,7 +124,116 @@ function renderOptions(): void {
   const nodes: HTMLElement[] = [];
   const key = (prefix: string, id: string) => `${prefix}.${id}` as I18nKey;
 
-  if (activeTab === 'tops') {
+  if (activeTab === 'character') {
+    const c = outfit.character;
+    // skin tone: continuous Fitzpatrick slider (label shows the
+    // nearest roman numeral so the scale stays legible)
+    const skinRow = el('div', 'slider-row');
+    const skinVal = el('span', 'slider-val', fitzpatrickLabel(c.skinTone));
+    const skin = el('input', 'slider');
+    skin.type = 'range';
+    skin.min = '0';
+    skin.max = '1000';
+    skin.step = '1';
+    skin.value = String(Math.round(c.skinTone * 1000));
+    skin.setAttribute('aria-label', t('ui.skinTone'));
+    skin.addEventListener('input', () => {
+      const v = Number(skin.value) / 1000;
+      patchCharacter({ skinTone: v });
+      skinVal.textContent = fitzpatrickLabel(v);
+    });
+    skin.addEventListener('change', () => renderOptions());
+    skinRow.append(el('span', 'slider-label', t('ui.skinTone')), skin, skinVal);
+    nodes.push(skinRow);
+
+    // height: regenerated profile + camera/mirror follow
+    const heightRow = el('div', 'slider-row');
+    const cm = Math.round(c.height * 100);
+    const heightVal = el('span', 'slider-val', `${cm} cm`);
+    const height = el('input', 'slider');
+    height.type = 'range';
+    height.min = String(Math.round(HEIGHT_MIN * 100));
+    height.max = String(Math.round(HEIGHT_MAX * 100));
+    height.step = '1';
+    height.value = String(cm);
+    height.setAttribute('aria-label', t('ui.height'));
+    height.addEventListener('input', () => {
+      const v = Number(height.value);
+      patchCharacter({ height: v / 100 });
+      heightVal.textContent = `${v} cm`;
+    });
+    height.addEventListener('change', () => renderOptions());
+    heightRow.append(el('span', 'slider-label', t('ui.height')), height, heightVal);
+    nodes.push(heightRow);
+
+    // hairstyle chips
+    nodes.push(el('span', 'group-label', t('ui.hairStyle')));
+    for (const style of HAIR_STYLES) {
+      nodes.push(
+        chip(t(key('hair', style)), c.hairStyle === style, () =>
+          update({ ...outfit, character: { ...c, hairStyle: style } }),
+        ),
+      );
+    }
+    // hair / eye color swatches
+    const swatch = (color: string, selected: boolean, label: string, onClick: () => void) => {
+      const s = el('button', 'swatch') as HTMLButtonElement;
+      s.type = 'button';
+      s.style.background = color;
+      s.setAttribute('aria-pressed', String(selected));
+      s.setAttribute('aria-label', `${label} ${color}`);
+      s.addEventListener('click', onClick);
+      return s;
+    };
+    nodes.push(el('span', 'group-label', t('ui.hairColor')));
+    for (const color of HAIR_COLORS) {
+      nodes.push(
+        swatch(color, c.hairColor === color, t('ui.hairColor'), () =>
+          update({ ...outfit, character: { ...c, hairColor: color } }),
+        ),
+      );
+    }
+    nodes.push(el('span', 'group-label', t('ui.eyeColor')));
+    for (const color of EYE_COLORS) {
+      nodes.push(
+        swatch(color, c.eyeColor === color, t('ui.eyeColor'), () =>
+          update({ ...outfit, character: { ...c, eyeColor: color } }),
+        ),
+      );
+    }
+
+    // seed: this person + outfit as one short string. Copy it out,
+    // or paste someone else's in — everything resolves on-device.
+    nodes.push(el('span', 'group-label', t('ui.seed')));
+    const seedRow = el('div', 'seed-row');
+    const seedVal = el('code', 'seed-value', encodeSeed(outfit));
+    seedVal.id = 'seed-value';
+    const copyBtn = chip(t('ui.copy'), false, () => {
+      try {
+        void navigator.clipboard
+          ?.writeText(encodeSeed(outfit))
+          .then(() => showToast(t('ui.seedCopied')))
+          .catch(() => undefined);
+      } catch {
+        // Clipboard unavailable (permissions/context): the seed is
+        // still visible to copy by hand.
+      }
+    });
+    seedRow.append(seedVal, copyBtn);
+    nodes.push(seedRow);
+    const applyRow = el('div', 'seed-row');
+    const seedInput = el('input', 'seed-input');
+    seedInput.type = 'text';
+    seedInput.placeholder = 'FR1-…';
+    seedInput.setAttribute('aria-label', t('ui.seed'));
+    const applyBtn = chip(t('ui.seedApply'), false, () => {
+      const decoded = decodeSeed(seedInput.value);
+      if (decoded) update(decoded);
+      else showToast(t('ui.seedInvalid'));
+    });
+    applyRow.append(seedInput, applyBtn);
+    nodes.push(applyRow);
+  } else if (activeTab === 'tops') {
     for (const style of TOP_STYLES) {
       nodes.push(
         chip(t(key('top', style)), outfit.topStyle === style, () =>
@@ -190,7 +324,8 @@ document.getElementById('btn-photo')!.addEventListener('click', () => {
   void exportPhoto();
 });
 document.getElementById('btn-random')!.addEventListener('click', () => {
-  update(randomOutfit());
+  // Randomize the outfit, not the person.
+  update({ ...randomOutfit(), character: outfit.character });
 });
 const spinBtn = document.getElementById('btn-spin')!;
 spinBtn.addEventListener('click', () => {
@@ -242,12 +377,21 @@ interface FittingRoomBridge {
   ready: boolean;
   getOutfit(): Outfit;
   setOutfit(partial: Partial<Outfit>): void;
+  getSeed(): string;
+  setSeed(seed: string): boolean;
   cardDataURL(): Promise<string>;
 }
 const bridge: FittingRoomBridge = {
   ready: true,
   getOutfit: () => ({ ...outfit }),
   setOutfit: (partial) => update({ ...outfit, ...partial }),
+  getSeed: () => encodeSeed(outfit),
+  setSeed: (seed) => {
+    const decoded = decodeSeed(seed);
+    if (!decoded) return false;
+    update(decoded);
+    return true;
+  },
   cardDataURL: async () => {
     stage.renderer.render(stage.scene, stage.camera);
     const blob = await composeShareCard(canvas, {

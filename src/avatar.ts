@@ -1,6 +1,15 @@
 // The base avatar, built entirely in code — no downloaded model.
-// Real-leaning proportions (~7.2 heads, 1.74 m) with smooth-shaded
-// lathe/capsule forms and procedural PBR materials (see textures.ts).
+// Real-leaning proportions (~7.2 heads at the 1.74 m design height)
+// with smooth-shaded lathe/capsule forms and procedural PBR
+// materials (see textures.ts).
+//
+// The avatar is generated from a CharacterParams vector (see
+// character.ts): skin/hair/eye colors, hairstyle and height are
+// parameters, not constants. Height is applied at generation time
+// as a frame scale — full strength vertically, damped across the
+// width so a taller person is not simply a wider one — and
+// setCharacter() regenerates the affected parts when the vector
+// changes.
 //
 // Face design: a calm mannequin face. The chibi version's selectable
 // expressions worked by squashing the eyes to 12% height, which on a
@@ -13,6 +22,12 @@
 import * as THREE from 'three';
 import { fabricTextures, hairTextures, skinTextures } from './textures';
 import type { PoseId } from './outfit';
+import {
+  BASE_HEIGHT,
+  skinColorForTone,
+  type CharacterParams,
+  type HairStyleId,
+} from './character';
 
 export interface AvatarRig {
   root: THREE.Group;
@@ -26,6 +41,10 @@ export interface AvatarRig {
    *  always matches its sleeves. Recolored by the outfit. */
   topMaterial: THREE.MeshStandardMaterial;
   applyPose(pose: PoseId): void;
+  /** Regenerate the parameter-driven parts (colors, hairstyle,
+   *  height frame) from a new character vector. Cheap when nothing
+   *  changed, so callers may invoke it on every state update. */
+  setCharacter(next: CharacterParams): void;
   tick(timeSec: number): void;
 }
 
@@ -56,10 +75,173 @@ function mesh(
   return m;
 }
 
-export function buildAvatar(): AvatarRig {
+// Head-local skull profile (radius, height above the head origin).
+// The lathe is radially symmetric; scale (0.88, 1, 1.12) stretches
+// it into a real head's width/depth ratio.
+const SKULL_PROFILE: Array<[number, number]> = [
+  [0.015, 0.002],
+  [0.05, 0.01],
+  [0.066, 0.032],
+  [0.075, 0.062],
+  [0.08, 0.098],
+  [0.081, 0.132],
+  [0.076, 0.168],
+  [0.062, 0.205],
+  [0.036, 0.232],
+  [0.001, 0.244],
+];
+
+/** A hairstyle as a head-local group: a lathe shell that follows
+ *  the skull (a sphere cap cannot — the crown sits higher than a
+ *  sphere of face width), a fringe shell, and style-specific mass.
+ *  All shapes are procedural; the material (and its color) is the
+ *  avatar's shared hair material. */
+function buildHair(style: HairStyleId, hairMat: THREE.Material): THREE.Group {
+  const g = new THREE.Group();
+  const cap = latheFromProfile(
+    SKULL_PROFILE.slice(3).map(([r, y]): [number, number] => [r + 0.005, y + 0.003]),
+    hairMat,
+    56,
+  );
+  cap.scale.set(0.88, 1, 1.12);
+  cap.position.z = -0.004;
+  g.add(cap);
+
+  const fringe = (
+    sweep: number,
+    y: number,
+    tilt: number,
+  ): THREE.Mesh => {
+    const f = mesh(
+      new THREE.SphereGeometry(0.0845, 48, 24, 0, Math.PI * 2, 0, Math.PI * sweep),
+      hairMat,
+      0,
+      y,
+      0.004,
+    );
+    f.scale.set(0.9, 1.05, 1.1);
+    f.rotation.x = tilt;
+    return f;
+  };
+
+  switch (style) {
+    case 'bob': {
+      g.add(fringe(0.3, 0.132, 0.3));
+      const back = mesh(new THREE.CapsuleGeometry(0.05, 0.14, 6, 18), hairMat, 0, 0.015, -0.062);
+      back.rotation.x = 0.1;
+      g.add(back);
+      for (const side of [-1, 1]) {
+        const lock = mesh(new THREE.CapsuleGeometry(0.017, 0.09, 4, 12), hairMat, side * 0.07, 0.045, 0.03);
+        lock.rotation.z = -side * 0.06;
+        lock.rotation.x = -0.05;
+        g.add(lock);
+      }
+      break;
+    }
+    case 'long': {
+      g.add(fringe(0.3, 0.132, 0.3));
+      const back = mesh(new THREE.CapsuleGeometry(0.056, 0.34, 6, 18), hairMat, 0, -0.1, -0.075);
+      back.rotation.x = 0.06;
+      g.add(back);
+      for (const side of [-1, 1]) {
+        const lock = mesh(new THREE.CapsuleGeometry(0.018, 0.2, 4, 12), hairMat, side * 0.072, -0.03, 0.028);
+        lock.rotation.z = -side * 0.05;
+        lock.rotation.x = -0.04;
+        g.add(lock);
+      }
+      break;
+    }
+    case 'short': {
+      g.add(fringe(0.26, 0.138, 0.22));
+      const tuft = mesh(new THREE.CapsuleGeometry(0.048, 0.03, 4, 14), hairMat, 0, 0.055, -0.058);
+      tuft.rotation.x = 0.15;
+      g.add(tuft);
+      break;
+    }
+    case 'ponytail': {
+      g.add(fringe(0.3, 0.132, 0.3));
+      const base = mesh(new THREE.SphereGeometry(0.03, 14, 10), hairMat, 0, 0.2, -0.055);
+      g.add(base);
+      const band = mesh(new THREE.TorusGeometry(0.027, 0.0065, 8, 20), hairMat, 0, 0.198, -0.06);
+      band.rotation.x = 1.1;
+      g.add(band);
+      const tail = mesh(new THREE.CapsuleGeometry(0.026, 0.24, 6, 14), hairMat, 0, 0.1, -0.09);
+      tail.rotation.x = -0.3;
+      g.add(tail);
+      break;
+    }
+    case 'bun': {
+      g.add(fringe(0.3, 0.132, 0.3));
+      const bun = mesh(new THREE.SphereGeometry(0.037, 18, 12), hairMat, 0, 0.238, -0.04);
+      g.add(bun);
+      const wrap = mesh(new THREE.TorusGeometry(0.035, 0.006, 8, 20), hairMat, 0, 0.232, -0.042);
+      wrap.rotation.x = 1.2;
+      g.add(wrap);
+      break;
+    }
+  }
+  return g;
+}
+
+// ---- poses ----
+// A pose is a full set of joint angles; applyPose only retargets,
+// and tick() eases the actual rotations toward the target, so
+// switching poses is a smooth transition instead of a teleport.
+
+type Vec3 = [number, number, number];
+interface JointAngles {
+  ls: Vec3;
+  rs: Vec3;
+  le: Vec3;
+  re: Vec3;
+  head: Vec3;
+}
+
+function poseTargets(pose: PoseId): JointAngles {
+  const t: JointAngles = {
+    ls: [0, 0, -0.1],
+    rs: [0, 0, 0.1],
+    le: [-0.06, 0, 0],
+    re: [-0.06, 0, 0],
+    head: [0, 0, 0],
+  };
+  switch (pose) {
+    case 'wave':
+      t.rs = [0, 0, 2.45];
+      t.re = [-0.15, 0, 0];
+      t.head = [0, 0, 0.05];
+      break;
+    case 'cheer':
+      t.ls = [0, 0, -2.45];
+      t.rs = [0, 0, 2.45];
+      t.le = [0, 0, 0];
+      t.re = [0, 0, 0];
+      t.head = [-0.05, 0, 0];
+      break;
+    case 'peace':
+      t.rs = [0, 0, 2.35];
+      t.re = [-0.35, 0, 0];
+      t.ls = [0, 0, -0.55];
+      t.le = [-0.5, 0, 0];
+      t.head = [0, 0, -0.05];
+      break;
+    case 'relax':
+      t.ls = [0, 0, -0.16];
+      t.rs = [0, 0, 0.16];
+      t.le = [-0.38, 0, 0];
+      t.re = [-0.38, 0, 0];
+      t.head = [0.04, 0, 0.04];
+      break;
+    case 'stand':
+      break;
+  }
+  return t;
+}
+
+export function buildAvatar(character: CharacterParams): AvatarRig {
   const skinTex = skinTextures();
   const skin = new THREE.MeshStandardMaterial({
-    color: '#e9b48c',
+    color: skinColorForTone(character.skinTone),
     map: skinTex.map,
     bumpMap: skinTex.bump,
     bumpScale: 0.15,
@@ -68,7 +250,7 @@ export function buildAvatar(): AvatarRig {
   });
   const hairTex = hairTextures();
   const hairMat = new THREE.MeshStandardMaterial({
-    color: '#503729',
+    color: character.hairColor,
     map: hairTex.map,
     bumpMap: hairTex.bump,
     bumpScale: 0.3,
@@ -99,19 +281,28 @@ export function buildAvatar(): AvatarRig {
     roughness: 0.32,
     envMapIntensity: 0.9,
   });
+  const eyeMat = new THREE.MeshStandardMaterial({
+    color: character.eyeColor,
+    roughness: 0.12,
+    envMapIntensity: 1.3,
+  });
 
   const root = new THREE.Group();
   // The stage podium's top surface sits at y=0.12 (see scene.ts).
   const BASE_Y = 0.12;
   root.position.y = BASE_Y;
+  // The frame carries the height scale; root stays unscaled so the
+  // feet remain planted on the podium at any height.
+  const frame = new THREE.Group();
+  root.add(frame);
 
   // ---- legs & shoes ----
   for (const side of [-1, 1]) {
     const x = side * 0.096;
-    root.add(mesh(new THREE.CapsuleGeometry(0.067, 0.25, 6, 20), skin, x, 0.645, 0));
-    root.add(mesh(new THREE.SphereGeometry(0.047, 20, 14), skin, x, 0.462, 0.004));
-    root.add(mesh(new THREE.CapsuleGeometry(0.043, 0.26, 6, 18), skin, x, 0.278, 0));
-    root.add(mesh(new THREE.CylinderGeometry(0.031, 0.034, 0.1, 14), skin, x, 0.075, 0));
+    frame.add(mesh(new THREE.CapsuleGeometry(0.067, 0.25, 6, 20), skin, x, 0.645, 0));
+    frame.add(mesh(new THREE.SphereGeometry(0.047, 20, 14), skin, x, 0.462, 0.004));
+    frame.add(mesh(new THREE.CapsuleGeometry(0.043, 0.26, 6, 18), skin, x, 0.278, 0));
+    frame.add(mesh(new THREE.CylinderGeometry(0.031, 0.034, 0.1, 14), skin, x, 0.075, 0));
     // flat shoe: sole + upper + toe + low heel
     const shoe = new THREE.Group();
     shoe.position.set(x, 0, 0.012);
@@ -122,15 +313,15 @@ export function buildAvatar(): AvatarRig {
     toe.scale.set(0.037, 0.02, 0.045);
     const heel = mesh(new THREE.BoxGeometry(0.054, 0.028, 0.034), shoeMat, 0, 0.014, -0.07);
     shoe.add(sole, upper, toe, heel);
-    root.add(shoe);
+    frame.add(shoe);
   }
 
   // ---- pelvis (base-layer shorts) ----
   const pelvis = mesh(new THREE.SphereGeometry(1, 36, 24), baseFabric, 0, 0.885, 0);
   pelvis.scale.set(0.163, 0.115, 0.128);
-  root.add(pelvis);
+  frame.add(pelvis);
   for (const side of [-1, 1]) {
-    root.add(
+    frame.add(
       mesh(new THREE.CylinderGeometry(0.078, 0.07, 0.13, 20), baseFabric, side * 0.096, 0.8, 0),
     );
   }
@@ -152,20 +343,20 @@ export function buildAvatar(): AvatarRig {
     baseFabric,
   );
   torso.scale.set(1, 1, 0.8);
-  root.add(torso);
-  root.add(mesh(new THREE.CylinderGeometry(0.042, 0.05, 0.15, 20), skin, 0, 1.465, 0));
+  frame.add(torso);
+  frame.add(mesh(new THREE.CylinderGeometry(0.042, 0.05, 0.15, 20), skin, 0, 1.465, 0));
 
   const torsoAnchor = new THREE.Group();
   torsoAnchor.position.set(0, 1.12, 0);
-  root.add(torsoAnchor);
+  frame.add(torsoAnchor);
 
   const neckAnchor = new THREE.Group();
   neckAnchor.position.set(0, 1.415, 0);
-  root.add(neckAnchor);
+  frame.add(neckAnchor);
 
   const bagAnchor = new THREE.Group();
   bagAnchor.position.set(0.235, 1.02, 0.02);
-  root.add(bagAnchor);
+  frame.add(bagAnchor);
 
   // ---- arms ----
   function buildArm(side: -1 | 1): { shoulder: THREE.Group; elbow: THREE.Group } {
@@ -187,41 +378,23 @@ export function buildAvatar(): AvatarRig {
     hand.add(palm, thumb);
     elbow.add(hand);
     shoulder.add(elbow);
-    root.add(shoulder);
+    frame.add(shoulder);
     return { shoulder, elbow };
   }
   const armL = buildArm(-1);
   const armR = buildArm(1);
 
   // ---- head ----
-  // Lathe profile is radially symmetric; scale (0.88, 1, 1.12)
-  // stretches it into a real head's width/depth ratio. Feature
-  // depths below are computed against that scaled surface.
+  // Feature depths below are computed against the scaled skull
+  // surface (lathe profile × (0.88, 1, 1.12)).
   const head = new THREE.Group();
   head.position.set(0, 1.5, 0);
-  root.add(head);
-  const SKULL_PROFILE: Array<[number, number]> = [
-    [0.015, 0.002],
-    [0.05, 0.01],
-    [0.066, 0.032],
-    [0.075, 0.062],
-    [0.08, 0.098],
-    [0.081, 0.132],
-    [0.076, 0.168],
-    [0.062, 0.205],
-    [0.036, 0.232],
-    [0.001, 0.244],
-  ];
+  frame.add(head);
   const skull = latheFromProfile(SKULL_PROFILE, skin, 56);
   skull.scale.set(0.88, 1, 1.12);
   head.add(skull);
 
   // eyes: almond eyeballs + skin lids (the lids do the blinking)
-  const eyeMat = new THREE.MeshStandardMaterial({
-    color: '#2e2019',
-    roughness: 0.12,
-    envMapIntensity: 1.3,
-  });
   function buildEye(side: -1 | 1): THREE.Group {
     const g = new THREE.Group();
     g.position.set(side * 0.034, 0.115, 0.0735);
@@ -287,36 +460,9 @@ export function buildAvatar(): AvatarRig {
   lips.castShadow = false;
   head.add(lips);
 
-  // hair: a lathe shell that follows the skull (a sphere cap cannot —
-  // the crown sits higher than a sphere of face width), plus a
-  // forward-tilted fringe shell, back mass and side locks
-  const hairCap = latheFromProfile(
-    SKULL_PROFILE.slice(3).map(([r, y]): [number, number] => [r + 0.005, y + 0.003]),
-    hairMat,
-    56,
-  );
-  hairCap.scale.set(0.88, 1, 1.12);
-  hairCap.position.z = -0.004;
-  head.add(hairCap);
-  const fringe = mesh(
-    new THREE.SphereGeometry(0.0845, 48, 24, 0, Math.PI * 2, 0, Math.PI * 0.3),
-    hairMat,
-    0,
-    0.132,
-    0.004,
-  );
-  fringe.scale.set(0.9, 1.05, 1.1);
-  fringe.rotation.x = 0.3;
-  head.add(fringe);
-  const backHair = mesh(new THREE.CapsuleGeometry(0.05, 0.14, 6, 18), hairMat, 0, 0.015, -0.062);
-  backHair.rotation.x = 0.1;
-  head.add(backHair);
-  for (const side of [-1, 1]) {
-    const lock = mesh(new THREE.CapsuleGeometry(0.017, 0.09, 4, 12), hairMat, side * 0.07, 0.045, 0.03);
-    lock.rotation.z = -side * 0.06;
-    lock.rotation.x = -0.05;
-    head.add(lock);
-  }
+  // hair (style is a character parameter; rebuilt by setCharacter)
+  let hairGroup = buildHair(character.hairStyle, hairMat);
+  head.add(hairGroup);
 
   const hatAnchor = new THREE.Group();
   hatAnchor.position.set(0, 0.242, 0);
@@ -326,63 +472,115 @@ export function buildAvatar(): AvatarRig {
   glassesAnchor.position.set(0, 0.115, 0.077);
   head.add(glassesAnchor);
 
+  // ---- character regeneration ----
+  let current: CharacterParams = { ...character };
+
+  function applyHeight(height: number): void {
+    const sy = height / BASE_HEIGHT;
+    const sxz = 1 + (sy - 1) * 0.45;
+    frame.scale.set(sxz, sy, sxz);
+  }
+  applyHeight(character.height);
+
+  function setCharacter(next: CharacterParams): void {
+    skin.color.set(skinColorForTone(next.skinTone));
+    hairMat.color.set(next.hairColor);
+    eyeMat.color.set(next.eyeColor);
+    if (next.hairStyle !== current.hairStyle) {
+      head.remove(hairGroup);
+      hairGroup.traverse((obj) => {
+        if (obj instanceof THREE.Mesh) obj.geometry.dispose();
+      });
+      hairGroup = buildHair(next.hairStyle, hairMat);
+      head.add(hairGroup);
+    }
+    if (next.height !== current.height) applyHeight(next.height);
+    current = { ...next };
+  }
+
   // ---- poses & idle motion ----
   let pose: PoseId = 'stand';
+  let target = poseTargets('stand');
+  let lastTick: number | null = null;
+
+  function snapTo(angles: JointAngles): void {
+    armL.shoulder.rotation.set(...angles.ls);
+    armR.shoulder.rotation.set(...angles.rs);
+    armL.elbow.rotation.set(...angles.le);
+    armR.elbow.rotation.set(...angles.re);
+    head.rotation.set(...angles.head);
+  }
+  snapTo(target);
 
   function applyPose(next: PoseId): void {
     pose = next;
-    armL.shoulder.rotation.set(0, 0, -0.1);
-    armR.shoulder.rotation.set(0, 0, 0.1);
-    armL.elbow.rotation.set(-0.06, 0, 0);
-    armR.elbow.rotation.set(-0.06, 0, 0);
-    head.rotation.set(0, 0, 0);
-    switch (next) {
-      case 'wave':
-        armR.shoulder.rotation.z = 2.45;
-        armR.elbow.rotation.x = -0.15;
-        head.rotation.z = 0.05;
-        break;
-      case 'cheer':
-        armL.shoulder.rotation.z = -2.45;
-        armR.shoulder.rotation.z = 2.45;
-        armL.elbow.rotation.x = 0;
-        armR.elbow.rotation.x = 0;
-        head.rotation.x = -0.05;
-        break;
-      case 'peace':
-        armR.shoulder.rotation.z = 2.35;
-        armR.elbow.rotation.x = -0.35;
-        armL.shoulder.rotation.z = -0.55;
-        armL.elbow.rotation.x = -0.5;
-        head.rotation.z = -0.05;
-        break;
-      case 'relax':
-        armL.shoulder.rotation.z = -0.16;
-        armR.shoulder.rotation.z = 0.16;
-        armL.elbow.rotation.x = -0.38;
-        armR.elbow.rotation.x = -0.38;
-        head.rotation.set(0.04, 0, 0.04);
-        break;
-      case 'stand':
-        break;
+    target = poseTargets(next);
+  }
+
+  function ease(joint: THREE.Group, a: Vec3, k: number): void {
+    joint.rotation.x += (a[0] - joint.rotation.x) * k;
+    joint.rotation.y += (a[1] - joint.rotation.y) * k;
+    joint.rotation.z += (a[2] - joint.rotation.z) * k;
+  }
+
+  // ---- blinking ----
+  // Naturalized: the interval varies (2.1–5.7 s, with an occasional
+  // quick double blink), and the lid curve closes fast, holds a
+  // beat, then opens slowly — the fixed 3.6 s metronome read as
+  // mechanical. Both lids share one curve: synchronized, as real
+  // blinks are. The schedule uses a seeded LCG so headless
+  // verification runs stay comparable.
+  let blinkSeed = 987654321;
+  const blinkRand = (): number => {
+    blinkSeed = (blinkSeed * 1103515245 + 12345) % 2147483648;
+    return blinkSeed / 2147483648;
+  };
+  let nextBlinkAt = 1.6 + blinkRand() * 2;
+  let blinkStart = -1;
+  let blinkDur = 0.22;
+
+  function blinkAmount(timeSec: number): number {
+    if (blinkStart < 0 && timeSec >= nextBlinkAt) {
+      blinkStart = timeSec;
+      blinkDur = 0.17 + blinkRand() * 0.13;
     }
+    if (blinkStart < 0) return 0;
+    const u = (timeSec - blinkStart) / blinkDur;
+    if (u >= 1) {
+      blinkStart = -1;
+      nextBlinkAt = timeSec + (blinkRand() < 0.16 ? 0.3 : 2.1 + blinkRand() * 3.6);
+      return 0;
+    }
+    const ss = (x: number): number => {
+      const c = Math.min(1, Math.max(0, x));
+      return c * c * (3 - 2 * c);
+    };
+    if (u < 0.38) return ss(u / 0.38); // fast close
+    if (u < 0.52) return 1; // brief hold
+    return 1 - ss((u - 0.52) / 0.48); // slower open
   }
 
   function tick(timeSec: number): void {
+    const dt = lastTick === null ? 0 : Math.min(0.05, Math.max(0, timeSec - lastTick));
+    lastTick = timeSec;
     // Barely-there idle sway — a living model, not a bobbing toy.
     root.position.y = BASE_Y + Math.sin(timeSec * 1.5) * 0.0035;
     root.rotation.z = Math.sin(timeSec * 0.6) * 0.004;
-    // Blink: lids swing down for ~150 ms every ~3.6 s.
-    const phase = timeSec % 3.6;
-    const blink = phase < 0.16 ? Math.sin((phase / 0.16) * Math.PI) : 0;
+    // Pose transition: ease every joint toward the pose target.
+    const k = 1 - Math.exp(-dt * 7);
+    if (k > 0) {
+      const waveZ = pose === 'wave' ? Math.sin(timeSec * 6.5) * 0.18 : 0;
+      ease(armL.shoulder, target.ls, k);
+      ease(armR.shoulder, [target.rs[0], target.rs[1], target.rs[2] + waveZ], k);
+      ease(armL.elbow, target.le, k);
+      ease(armR.elbow, target.re, k);
+      ease(head, target.head, k);
+    }
+    // Blink: both lids on the same natural curve.
+    const blink = blinkAmount(timeSec);
     lidL.rotation.x = -0.18 + blink * 0.95;
     lidR.rotation.x = -0.18 + blink * 0.95;
-    if (pose === 'wave') {
-      armR.shoulder.rotation.z = 2.45 + Math.sin(timeSec * 6.5) * 0.18;
-    }
   }
-
-  applyPose('stand');
 
   return {
     root,
@@ -394,6 +592,7 @@ export function buildAvatar(): AvatarRig {
     bagAnchor,
     topMaterial,
     applyPose,
+    setCharacter,
     tick,
   };
 }

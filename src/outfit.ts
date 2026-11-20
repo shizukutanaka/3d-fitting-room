@@ -2,6 +2,8 @@
 // Kept as plain data so it can be saved to localStorage (on-device only)
 // and restored on the next visit. Nothing here ever leaves the device.
 
+import { DEFAULT_CHARACTER, sanitizeCharacter, type CharacterParams } from './character';
+
 export type TopStyle = 'tee' | 'hoodie' | 'dress';
 export type HatId = 'none' | 'cap' | 'beanie' | 'catears' | 'ribbon';
 export type GlassesId = 'none' | 'round' | 'square' | 'sunglasses';
@@ -15,6 +17,10 @@ export interface Outfit {
   glasses: GlassesId;
   accessory: AccessoryId;
   pose: PoseId;
+  /** Who the avatar is (skin, hair, height…). Added in character
+   *  system phase 0; older saves have no such key and load with
+   *  defaults — see sanitizeOutfit. */
+  character: CharacterParams;
 }
 
 /** Color swatches offered for tops. */
@@ -41,6 +47,7 @@ export const DEFAULT_OUTFIT: Outfit = {
   glasses: 'none',
   accessory: 'none',
   pose: 'stand',
+  character: { ...DEFAULT_CHARACTER },
 };
 
 const STORAGE_KEY = 'fitting-room.outfit.v1';
@@ -65,6 +72,9 @@ export function sanitizeOutfit(raw: unknown): Outfit {
     glasses: oneOf(o.glasses, GLASSES, DEFAULT_OUTFIT.glasses),
     accessory: oneOf(o.accessory, ACCESSORIES, DEFAULT_OUTFIT.accessory),
     pose: oneOf(o.pose, POSES, DEFAULT_OUTFIT.pose),
+    // Pre-phase-0 saves carry no character key: sanitizeCharacter
+    // of undefined yields the defaults, so old saves just work.
+    character: sanitizeCharacter(o.character),
   };
 }
 
@@ -98,5 +108,9 @@ export function randomOutfit(rng: () => number = Math.random): Outfit {
     glasses: pick(GLASSES, rng),
     accessory: pick(ACCESSORIES, rng),
     pose: pick(POSES, rng),
+    // Randomizing is about the outfit; the person stays who they
+    // are, so the character carries over at the default unless the
+    // caller merges their current one in (main.ts does).
+    character: { ...DEFAULT_CHARACTER },
   };
 }

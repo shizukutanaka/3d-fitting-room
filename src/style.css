@@ -183,6 +183,64 @@ body {
   margin-right: 2px;
 }
 
+.slider-row {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.slider-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  min-width: 52px;
+}
+
+.slider {
+  flex: 1;
+  accent-color: var(--accent);
+  height: 28px;
+  min-width: 0;
+}
+
+.slider-val {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  min-width: 48px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.seed-row {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.seed-value {
+  flex: 1;
+  font-size: 12.5px;
+  background: rgba(55, 49, 43, 0.06);
+  padding: 7px 10px;
+  border-radius: 8px;
+  word-break: break-all;
+  min-width: 0;
+}
+
+.seed-input {
+  flex: 1;
+  border: 2px solid var(--accent-soft);
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 13px;
+  background: #fff;
+  color: var(--ink);
+  min-width: 0;
+}
+
 #actions {
   display: flex;
   gap: 8px;

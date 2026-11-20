@@ -19,10 +19,11 @@ export interface Stage {
   tick(timeSec: number): void;
   resize(): void;
   resetView(): void;
+  /** Reframe the room around a subject of this height (meters):
+   *  the camera's home position and orbit target track it, and the
+   *  mirror grows/shrinks so it always covers the full figure. */
+  setSubjectHeight(heightM: number): void;
 }
-
-const HOME_POS = new THREE.Vector3(0, 1.32, 3.9);
-const HOME_TARGET = new THREE.Vector3(0, 0.94, 0);
 
 function mesh(geo: THREE.BufferGeometry, material: THREE.Material, x = 0, y = 0, z = 0): THREE.Mesh {
   const m = new THREE.Mesh(geo, material);
@@ -53,11 +54,17 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
   scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
   scene.environmentIntensity = 0.45;
 
+  // The framing is expressed relative to the subject's height so a
+  // height change (character parameter) reframes instead of cropping.
+  let subjectHeight = 1.74;
+  const homePos = (): THREE.Vector3 => new THREE.Vector3(0, subjectHeight * 0.76, 3.9);
+  const homeTarget = (): THREE.Vector3 => new THREE.Vector3(0, subjectHeight * 0.54, 0);
+
   const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 60);
-  camera.position.copy(HOME_POS);
+  camera.position.copy(homePos());
 
   const controls = new OrbitControls(camera, canvas);
-  controls.target.copy(HOME_TARGET);
+  controls.target.copy(homeTarget());
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
   controls.minDistance = 1.5;
@@ -176,10 +183,31 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
   });
   mirror.position.set(0, 1.42, -2.575);
   scene.add(mirror);
-  scene.add(mesh(new THREE.BoxGeometry(1.62, 0.055, 0.035), brass, 0, 2.6, -2.565));
-  scene.add(mesh(new THREE.BoxGeometry(1.62, 0.055, 0.035), brass, 0, 0.245, -2.565));
-  scene.add(mesh(new THREE.BoxGeometry(0.055, 2.42, 0.035), brass, -0.81, 1.42, -2.565));
-  scene.add(mesh(new THREE.BoxGeometry(0.055, 2.42, 0.035), brass, 0.81, 1.42, -2.565));
+  const mirrorFrameTop = mesh(new THREE.BoxGeometry(1.62, 0.055, 0.035), brass, 0, 2.6, -2.565);
+  const mirrorFrameBottom = mesh(new THREE.BoxGeometry(1.62, 0.055, 0.035), brass, 0, 0.245, -2.565);
+  const mirrorFrameL = mesh(new THREE.BoxGeometry(0.055, 2.42, 0.035), brass, -0.81, 1.42, -2.565);
+  const mirrorFrameR = mesh(new THREE.BoxGeometry(0.055, 2.42, 0.035), brass, 0.81, 1.42, -2.565);
+  scene.add(mirrorFrameTop, mirrorFrameBottom, mirrorFrameL, mirrorFrameR);
+
+  // The mirror follows the subject's height: its glass and frame
+  // are re-laid-out so the full figure stays reflectable, from the
+  // shortest to the tallest character the parameters allow.
+  function layoutMirror(heightM: number): void {
+    const mirrorH = heightM + 0.62;
+    const bottom = 0.25;
+    const centerY = bottom + mirrorH / 2;
+    mirror.geometry.dispose();
+    mirror.geometry = new THREE.PlaneGeometry(1.5, mirrorH);
+    mirror.position.y = centerY;
+    mirrorFrameTop.position.y = bottom + mirrorH + 0.0275;
+    mirrorFrameBottom.position.y = bottom - 0.0275;
+    for (const bar of [mirrorFrameL, mirrorFrameR]) {
+      bar.geometry.dispose();
+      bar.geometry = new THREE.BoxGeometry(0.055, mirrorH + 0.11, 0.035);
+      bar.position.y = centerY;
+    }
+  }
+  layoutMirror(subjectHeight);
 
   // ---- podium (top surface at y=0.12 — the avatar stands on it) ----
   const podium = new THREE.Mesh(
@@ -292,8 +320,16 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
   }
 
   function resetView(): void {
-    camera.position.copy(HOME_POS);
-    controls.target.copy(HOME_TARGET);
+    camera.position.copy(homePos());
+    controls.target.copy(homeTarget());
+  }
+
+  function setSubjectHeight(heightM: number): void {
+    if (Math.abs(heightM - subjectHeight) < 0.001) return;
+    subjectHeight = heightM;
+    layoutMirror(heightM);
+    controls.target.y = heightM * 0.54;
+    camera.position.y = heightM * 0.76;
   }
 
   function tick(): void {
@@ -301,5 +337,5 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
   }
 
   resize();
-  return { scene, camera, renderer, controls, tick, resize, resetView };
+  return { scene, camera, renderer, controls, tick, resize, resetView, setSubjectHeight };
 }
