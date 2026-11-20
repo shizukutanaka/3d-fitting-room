@@ -31,7 +31,16 @@
 //   optional). The name is a display label set by the user on
 //   their own device (LEGAL-ETHICS.md judgment J-07); it is
 //   not a character parameter and never enters the specs.
-// Encoding always produces v5.
+// - v6 ("FR6-", 37+ bytes): the v5 layout with a two-byte
+//   wardrobe block (outer style, outer color) inserted between
+//   the v4 core and the name block — the re-centering's
+//   outerwear category (DESIGN.md §21). Everything before the
+//   block is byte-for-byte v5's core; the name block keeps its
+//   shape and simply moves two bytes later. v1–v5 seeds carry
+//   no outerwear and load with none, which is what they showed.
+//   New top/bottom styles and colors needed no new bytes: they
+//   are indices into catalogs that only ever grow by appending.
+// Encoding always produces v6.
 
 import {
   ACCESSORIES,
@@ -40,6 +49,8 @@ import {
   GLASSES,
   HATS,
   NAME_MAX_UTF8_BYTES,
+  OUTER_COLORS,
+  OUTER_STYLES,
   POSES,
   SHOE_COLORS,
   SHOE_STYLES,
@@ -65,6 +76,7 @@ const PREFIX_V2 = 'FR2-';
 const PREFIX_V3 = 'FR3-';
 const PREFIX_V4 = 'FR4-';
 const PREFIX_V5 = 'FR5-';
+const PREFIX_V6 = 'FR6-';
 const BYTE_COUNT_V1 = 12;
 const BYTE_COUNT_V2 = 25;
 const BYTE_COUNT_V3 = 29;
@@ -120,7 +132,7 @@ export function encodeSeed(outfit: Outfit): string {
   // structural checks always pass for encoder output.
   const nameBytes = [...new TextEncoder().encode(sanitizeName(outfit.name))];
   const bytes = [
-    5,
+    6,
     Math.round(clamp(c.skinTone, 0, 1) * 255),
     Math.round((clamp(c.height, HEIGHT_MIN, HEIGHT_MAX) - HEIGHT_MIN) * 100),
     idx(HAIR_COLORS, c.hairColor),
@@ -138,11 +150,14 @@ export function encodeSeed(outfit: Outfit): string {
     idx(SHOE_STYLES, outfit.shoeStyle),
     idx(SHOE_COLORS, outfit.shoeColor),
     ...BODY_PARAM_KEYS.map((key) => quantizeRange(key, c[key])),
+    // v6 wardrobe block: outer style + outer color indices.
+    idx(OUTER_STYLES, outfit.outerStyle),
+    idx(OUTER_COLORS, outfit.outerColor),
     // v5 name block: length byte + UTF-8 bytes (possibly empty).
     nameBytes.length,
     ...nameBytes,
   ];
-  return PREFIX_V5 + bytesToBase64Url(bytes);
+  return PREFIX_V6 + bytesToBase64Url(bytes);
 }
 
 /** Decode a seed back into a full state. Returns null for anything
@@ -156,15 +171,18 @@ export function encodeSeed(outfit: Outfit): string {
  *  parameters); v1 and v2 seeds yield the default bottoms and
  *  shoes; v1–v3 seeds yield the default body (their layouts
  *  predate the body parameters); v1–v4 seeds yield no name
- *  (their layouts predate the identity foundation). A v5 name
- *  block must be structurally exact — length byte within the
+ *  (their layouts predate the identity foundation); v1–v5
+ *  seeds yield no outerwear (their layouts predate the
+ *  re-centering). A v5/v6 name block must be structurally
+ *  exact — length byte within the
  *  budget, total length matching, valid UTF-8 — or the seed is
  *  rejected whole; a structurally sound name is then sanitized
  *  like any other value. */
 export function decodeSeed(seed: unknown): Outfit | null {
   if (typeof seed !== 'string') return null;
   let body = seed.trim();
-  if (body.startsWith(PREFIX_V5)) body = body.slice(PREFIX_V5.length);
+  if (body.startsWith(PREFIX_V6)) body = body.slice(PREFIX_V6.length);
+  else if (body.startsWith(PREFIX_V5)) body = body.slice(PREFIX_V5.length);
   else if (body.startsWith(PREFIX_V4)) body = body.slice(PREFIX_V4.length);
   else if (body.startsWith(PREFIX_V3)) body = body.slice(PREFIX_V3.length);
   else if (body.startsWith(PREFIX_V2)) body = body.slice(PREFIX_V2.length);
@@ -172,24 +190,37 @@ export function decodeSeed(seed: unknown): Outfit | null {
   const bytes = base64UrlToBytes(body);
   if (!bytes) return null;
 
-  // v5: split the name block off, leaving the v4 core (with the
-  // version byte rewritten to 4) for the shared decode below.
+  // v5/v6: split the trailing blocks off, leaving the v4 core
+  // (with the version byte rewritten to 4) for the shared decode
+  // below. v6 carries the two-byte wardrobe block between the
+  // core and the name block; both versions' name blocks must be
+  // structurally exact or the seed is rejected whole.
   let name = '';
   let core = bytes;
-  if (bytes[0] === 5) {
-    if (bytes.length < BYTE_COUNT_V4 + 1) return null;
-    const nameLen = bytes[BYTE_COUNT_V4];
+  let wardrobe: { outerStyle: string; outerColor: string } | null = null;
+  if (bytes[0] === 5 || bytes[0] === 6) {
+    const wardBytes = bytes[0] === 6 ? 2 : 0;
+    if (bytes.length < BYTE_COUNT_V4 + wardBytes + 1) return null;
+    const nameLen = bytes[BYTE_COUNT_V4 + wardBytes];
     if (nameLen > NAME_MAX_UTF8_BYTES) return null;
-    if (bytes.length !== BYTE_COUNT_V4 + 1 + nameLen) return null;
+    if (bytes.length !== BYTE_COUNT_V4 + wardBytes + 1 + nameLen) return null;
     let nameText: string;
     try {
       nameText = new TextDecoder('utf-8', { fatal: true }).decode(
-        Uint8Array.from(bytes.slice(BYTE_COUNT_V4 + 1)),
+        Uint8Array.from(bytes.slice(BYTE_COUNT_V4 + wardBytes + 1)),
       );
     } catch {
       return null; // the name block is not valid UTF-8
     }
     name = sanitizeName(nameText);
+    if (bytes[0] === 6) {
+      const pickByte = (options: readonly string[], b: number): string =>
+        options[Math.min(options.length - 1, Math.max(0, b))] ?? options[0];
+      wardrobe = {
+        outerStyle: pickByte(OUTER_STYLES, bytes[BYTE_COUNT_V4]),
+        outerColor: pickByte(OUTER_COLORS, bytes[BYTE_COUNT_V4 + 1]),
+      };
+    }
     core = bytes.slice(0, BYTE_COUNT_V4);
     core[0] = 4;
   }
@@ -236,6 +267,10 @@ export function decodeSeed(seed: unknown): Outfit | null {
     return sanitizeOutfit({
       // Only v5 carries a name; for v2–v4 this is '' (unnamed).
       name,
+      // Only v6 carries the wardrobe block; for v1–v5 the keys
+      // are absent and sanitizeOutfit fills the defaults (no
+      // outerwear — what those seeds showed).
+      ...(wardrobe ?? {}),
       topStyle: at(TOP_STYLES, 19),
       topColor: at(TOP_COLORS, 20),
       hat: at(HATS, 21),

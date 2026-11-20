@@ -190,7 +190,7 @@ async function main() {
   results.checks.childCharacter = childOutfit.character;
   const childSeed = await win.webContents.executeJavaScript(`window.__fittingRoom.getSeed()`);
   results.checks.childSeed = childSeed;
-  results.checks.childSeedIsV5 = String(childSeed).startsWith('FR5-');
+  results.checks.childSeedIsV6 = String(childSeed).startsWith('FR6-');
   // Inheritance spot checks against the decoded parents.
   const cA = PARENT_A.character;
   const cB = PARENT_B.character;
@@ -245,7 +245,7 @@ async function main() {
     `window.__fittingRoom.getSeed()`,
   );
   await win.webContents.executeJavaScript(
-    `document.querySelectorAll('#tabs button')[0].click()`,
+    `(() => { const b = [...document.querySelectorAll('#tabs button')].find((x) => ['\u4eba\u7269', 'Character'].includes(x.textContent.trim())); if (b) b.click(); })()`,
   );
   await sleep(600);
   await win.webContents.executeJavaScript(

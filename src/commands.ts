@@ -29,6 +29,8 @@ import {
   BOTTOM_STYLES,
   GLASSES,
   HATS,
+  OUTER_COLORS,
+  OUTER_STYLES,
   POSES,
   SHOE_COLORS,
   SHOE_STYLES,
@@ -49,6 +51,8 @@ import { decodeSeed } from './seed';
 const OUTFIT_OPTION_COMMANDS = {
   set_top_style: { field: 'topStyle', options: TOP_STYLES },
   set_top_color: { field: 'topColor', options: TOP_COLORS },
+  set_outer_style: { field: 'outerStyle', options: OUTER_STYLES },
+  set_outer_color: { field: 'outerColor', options: OUTER_COLORS },
   set_bottom_style: { field: 'bottomStyle', options: BOTTOM_STYLES },
   set_bottom_color: { field: 'bottomColor', options: BOTTOM_COLORS },
   set_shoe_style: { field: 'shoeStyle', options: SHOE_STYLES },

@@ -6,6 +6,8 @@ import {
   DEFAULT_OUTFIT,
   GLASSES,
   HATS,
+  OUTER_COLORS,
+  OUTER_STYLES,
   POSES,
   SHOE_COLORS,
   SHOE_STYLES,
@@ -106,6 +108,8 @@ describe('outfit state', () => {
       const o = randomOutfit(rng);
       expect(TOP_STYLES).toContain(o.topStyle);
       expect(TOP_COLORS).toContain(o.topColor);
+      expect(OUTER_STYLES).toContain(o.outerStyle);
+      expect(OUTER_COLORS).toContain(o.outerColor);
       expect(BOTTOM_STYLES).toContain(o.bottomStyle);
       expect(BOTTOM_COLORS).toContain(o.bottomColor);
       expect(SHOE_STYLES).toContain(o.shoeStyle);

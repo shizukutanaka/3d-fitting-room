@@ -135,6 +135,22 @@ describe('prompt construction (generated from the specs and catalogs)', () => {
     expect(pants).toContain('pants');
   });
 
+  it('describes outerwear and the long dress/skirt, and hides bottoms under long dresses too', () => {
+    const layered = buildImagePrompt(
+      outfitWith({}, { outerStyle: 'coat', outerColor: '#2c3a55', bottomStyle: 'skirtLong' }),
+    ).prompt;
+    expect(layered).toContain('navy');
+    expect(layered).toContain('long coat');
+    expect(layered).toContain('long skirt');
+    const longDress = buildImagePrompt(
+      outfitWith({}, { topStyle: 'dressLong', bottomStyle: 'pants' }),
+    ).prompt;
+    expect(longDress).toContain('long one-piece dress');
+    expect(longDress).not.toContain('pants');
+    const plain = buildImagePrompt(outfitWith({})).prompt;
+    expect(plain).not.toContain('over it');
+  });
+
   it('appends the user extra words last, and anchors img2img on the input image', () => {
     const withExtra = buildImagePrompt(DEFAULT_OUTFIT, { extra: 'watercolor illustration' });
     expect(withExtra.prompt.endsWith('watercolor illustration')).toBe(true);
@@ -150,6 +166,7 @@ describe('prompt construction (generated from the specs and catalogs)', () => {
     for (const hex of EYE_COLORS) expect(EYE_COLOR_NAMES[hex], `eye ${hex}`).toBeTruthy();
     for (const hex of [
       ...PROMPT_CATALOGS.topColors,
+      ...PROMPT_CATALOGS.outerColors,
       ...PROMPT_CATALOGS.bottomColors,
       ...PROMPT_CATALOGS.shoeColors,
     ]) {
@@ -165,6 +182,7 @@ describe('prompt construction (generated from the specs and catalogs)', () => {
     >;
     const catalogs: Record<string, readonly string[]> = {
       top: PROMPT_CATALOGS.top,
+      outer: PROMPT_CATALOGS.outer,
       bottom: PROMPT_CATALOGS.bottom,
       shoe: PROMPT_CATALOGS.shoe,
       hat: PROMPT_CATALOGS.hat,

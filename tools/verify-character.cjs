@@ -116,7 +116,7 @@ async function main() {
   // seconds: under software rendering its presented frame lags the
   // DOM by whole frames.
   await win.webContents.executeJavaScript(
-    `document.querySelectorAll('#tabs button')[0].click()`,
+    `(() => { const b = [...document.querySelectorAll('#tabs button')].find((x) => ['\u4eba\u7269', 'Character'].includes(x.textContent.trim())); if (b) b.click(); })()`,
   );
   await win.webContents.executeJavaScript(
     `new Promise((res, rej) => {
@@ -131,7 +131,7 @@ async function main() {
   img = await win.webContents.capturePage();
   fs.writeFileSync(path.join(OUT, 'screenshot-params-panel.png'), img.toPNG());
   await win.webContents.executeJavaScript(
-    `document.querySelectorAll('#tabs button')[1].click()`,
+    `(() => { const b = [...document.querySelectorAll('#tabs button')].find((x) => ['\u30c8\u30c3\u30d7\u30b9', 'Tops'].includes(x.textContent.trim())); if (b) b.click(); })()`,
   );
 
   // 2. a different person: deep skin tone, tall, long blonde hair,
