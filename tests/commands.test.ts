@@ -18,6 +18,9 @@ import {
   SHOE_COLORS,
   SHOE_STYLES,
 } from '../src/outfit';
+import { synthesizeCharacter } from '../src/genetics';
+import { decodeSeed, encodeSeed } from '../src/seed';
+import { sanitizeCharacter } from '../src/character';
 
 // The command protocol is the trust boundary for LLM output and
 // agent input: everything untrusted passes validateCommands, and
@@ -206,6 +209,111 @@ describe('executeCommands', () => {
   });
 });
 
+describe('blend_characters', () => {
+  // Two distinct people, carried as seeds — the only inputs the
+  // command accepts (LEGAL-ETHICS.md judgment J-06: synthesis is
+  // between fictional people, named by their seeds).
+  const personA = sanitizeCharacter({
+    skinTone: 0.1,
+    height: 1.9,
+    hairColor: '#d9b380',
+    hairStyle: 'long',
+  });
+  const personB = sanitizeCharacter({
+    skinTone: 0.92,
+    height: 1.52,
+    hairColor: '#201612',
+    hairStyle: 'short',
+  });
+  const seedA = encodeSeed({ ...DEFAULT_OUTFIT, character: personA });
+  const seedB = encodeSeed({ ...DEFAULT_OUTFIT, character: personB });
+
+  it('synthesizes the person the pure function produces, and keeps the clothes', () => {
+    const { commands, rejected } = validateCommands([
+      { type: 'blend_characters', seedA, seedB, mixSeed: 36 },
+    ]);
+    expect(rejected).toEqual([]);
+    const current = { ...DEFAULT_OUTFIT, topStyle: 'hoodie' as const, pose: 'wave' as const };
+    const result = executeCommands(commands, current);
+    const expected = synthesizeCharacter(
+      decodeSeed(seedA)!.character,
+      decodeSeed(seedB)!.character,
+      36,
+    );
+    expect(result.outfit.character).toEqual(expected);
+    // Clothes are not inherited: the current outfit stays.
+    expect(result.outfit.topStyle).toBe('hoodie');
+    expect(result.outfit.pose).toBe('wave');
+    expect(result.applied).toEqual(['blend_characters mixSeed=36']);
+    // Deterministic through the command path too.
+    expect(executeCommands(commands, current).outfit.character).toEqual(expected);
+  });
+
+  it('derives a deterministic mix seed when none is given', () => {
+    const first = validateCommands([{ type: 'blend_characters', seedA, seedB }]);
+    const second = validateCommands([{ type: 'blend_characters', seedA, seedB }]);
+    expect(first.rejected).toEqual([]);
+    expect(second.commands).toEqual(first.commands);
+    const cmd = first.commands[0];
+    expect(cmd.type).toBe('blend_characters');
+    if (cmd.type === 'blend_characters') {
+      const expected = synthesizeCharacter(
+        decodeSeed(seedA)!.character,
+        decodeSeed(seedB)!.character,
+        cmd.mixSeed,
+      );
+      expect(executeCommands(first.commands, DEFAULT_OUTFIT).outfit.character).toEqual(expected);
+    }
+  });
+
+  it('rejects invalid parent seeds and a non-numeric mix seed, with reasons', () => {
+    const { commands, rejected } = validateCommands([
+      { type: 'blend_characters', seedA: 'FR9-bogus', seedB, mixSeed: 1 },
+      { type: 'blend_characters', seedA, seedB: 42, mixSeed: 1 },
+      { type: 'blend_characters', seedA, seedB: 'not a seed', mixSeed: 1 },
+      { type: 'blend_characters', seedA, seedB, mixSeed: 'soon' },
+      { type: 'blend_characters', seedA, seedB, mixSeed: null },
+    ]);
+    expect(commands).toEqual([]);
+    expect(rejected).toHaveLength(5);
+    expect(rejected[0].reason).toContain('seedA');
+    expect(rejected[1].reason).toContain('seedB');
+    expect(rejected[2].reason).toContain('seedB');
+    expect(rejected[3].reason).toContain('mixSeed');
+    expect(rejected[4].reason).toContain('mixSeed');
+  });
+
+  it('the adult safety restriction fences synthesized people on the command path too', () => {
+    // Parents that each pass the gate alone (short stature on one
+    // side, slight build traits on the other, both corrected to
+    // their legal forms by the seed round-trip): no mix seed may
+    // assemble a minor-like child from them.
+    const shortSeed = encodeSeed({
+      ...DEFAULT_OUTFIT,
+      character: sanitizeCharacter({ height: 1.45 }),
+    });
+    const slightSeed = encodeSeed({
+      ...DEFAULT_OUTFIT,
+      character: sanitizeCharacter({
+        height: 1.95,
+        bust: 0.8,
+        waist: 1.22,
+        hip: 0.86,
+        build: 0.85,
+        shoulderWidth: 0.88,
+      }),
+    });
+    for (let s = 0; s < 50; s++) {
+      const { commands, rejected } = validateCommands([
+        { type: 'blend_characters', seedA: shortSeed, seedB: slightSeed, mixSeed: s },
+      ]);
+      expect(rejected).toEqual([]);
+      const result = executeCommands(commands, DEFAULT_OUTFIT);
+      expect(youthScore(result.outfit.character)).toBeLessThanOrEqual(YOUTH_SCORE_MAX + 1e-9);
+    }
+  });
+});
+
 describe('describeCommandProtocol', () => {
   it('is generated from the specs: every character parameter appears', () => {
     const text = describeCommandProtocol();
@@ -220,6 +328,7 @@ describe('describeCommandProtocol', () => {
     }
     expect(text).toContain('set_pose');
     expect(text).toContain('share_card');
+    expect(text).toContain('blend_characters');
   });
 
   it('covers the body parameters from the same dynamic generation', () => {

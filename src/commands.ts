@@ -38,6 +38,8 @@ import {
   sanitizeOutfit,
   type Outfit,
 } from './outfit';
+import { deriveMixSeed, synthesizeCharacter } from './genetics';
+import { decodeSeed } from './seed';
 
 /** The outfit fields a single option command can set: command
  *  name → outfit field + the catalog its value must come from.
@@ -67,6 +69,7 @@ export type Command =
   | { type: OutfitOptionCommandName; value: string }
   | { type: 'randomize_outfit' }
   | { type: 'randomize_character' }
+  | { type: 'blend_characters'; seedA: string; seedB: string; mixSeed: number }
   | { type: 'share_card' }
   | { type: 'get_state' };
 
@@ -138,6 +141,36 @@ function validateOne(raw: unknown, out: ValidationResult): void {
         }
         out.commands.push({ type: 'set_character', param: key, value: r.value });
       }
+      return;
+    }
+    case 'blend_characters': {
+      // The only inputs are two person seeds. Both must decode —
+      // a seed is the product's validated state format, so what
+      // arrives here can only ever be two in-range fictional
+      // people (LEGAL-ETHICS.md judgment J-06). The mix seed is
+      // optional: without one it is derived from the pair, so a
+      // bare command is still deterministic.
+      const { seedA, seedB } = raw;
+      if (typeof seedA !== 'string' || !decodeSeed(seedA)) {
+        reject('seedA is not a valid person seed');
+        return;
+      }
+      if (typeof seedB !== 'string' || !decodeSeed(seedB)) {
+        reject('seedB is not a valid person seed');
+        return;
+      }
+      let mixSeed: number;
+      if (raw.mixSeed === undefined) {
+        mixSeed = deriveMixSeed(seedA, seedB);
+      } else {
+        const n = typeof raw.mixSeed === 'string' ? Number(raw.mixSeed) : raw.mixSeed;
+        if (typeof n !== 'number' || !Number.isFinite(n)) {
+          reject('mixSeed must be an integer');
+          return;
+        }
+        mixSeed = Math.floor(n) >>> 0;
+      }
+      out.commands.push({ type: 'blend_characters', seedA, seedB, mixSeed });
       return;
     }
     case 'randomize_outfit':
@@ -243,6 +276,25 @@ export function executeCommands(
         outfit = { ...outfit, character: randomCharacter(rng) };
         applied.push('randomize_character');
         break;
+      case 'blend_characters': {
+        // Validation proved both seeds decode; the re-check keeps
+        // execution total even for hand-built command objects.
+        // The synthesis result passes sanitizeCharacter inside
+        // synthesizeCharacter (and sanitizeOutfit again below), so
+        // the adult safety restriction fences the child exactly
+        // like any other person. Clothes are not inherited: the
+        // current outfit stays, the person is replaced.
+        const pa = decodeSeed(cmd.seedA);
+        const pb = decodeSeed(cmd.seedB);
+        if (pa && pb) {
+          outfit = {
+            ...outfit,
+            character: synthesizeCharacter(pa.character, pb.character, cmd.mixSeed),
+          };
+          applied.push(`blend_characters mixSeed=${cmd.mixSeed}`);
+        }
+        break;
+      }
       case 'share_card':
         wantShareCard = true;
         applied.push('share_card');
@@ -293,6 +345,7 @@ export function describeCommandProtocol(): string {
   lines.push(
     '- {"type":"randomize_outfit"} — random clothes, same person',
     '- {"type":"randomize_character"} — a new random person',
+    '- {"type":"blend_characters","seedA":"<seed of one person>","seedB":"<seed of another person>","mixSeed":<integer, optional>} — synthesize a new person from the two people named by their seeds; the same seeds and mixSeed always produce the same person. Clothes are not inherited: the current outfit stays on the new person',
     '- {"type":"share_card"} — save a photo of the current look',
     '- {"type":"get_state"} — report the current state back',
     'Values outside a range are clamped; values not in an option list are rejected. Never invent parameters, options or command types.',

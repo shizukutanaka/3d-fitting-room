@@ -130,6 +130,7 @@ sanitize の側にあるため、LLM 経由でも回避できない。未知の
 - {"type":"set_pose","value":<one of: stand | wave | cheer | peace | relax>}
 - {"type":"randomize_outfit"} — random clothes, same person
 - {"type":"randomize_character"} — a new random person
+- {"type":"blend_characters","seedA":"<seed of one person>","seedB":"<seed of another person>","mixSeed":<integer, optional>} — synthesize a new person from the two people named by their seeds; deterministic per (seedA, seedB, mixSeed). Clothes are not inherited
 - {"type":"share_card"} — save a photo of the current look
 - {"type":"get_state"} — report the current state back
 ```

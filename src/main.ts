@@ -47,6 +47,7 @@ import {
   type CharacterParams,
 } from './character';
 import { decodeSeed, encodeSeed } from './seed';
+import { synthesizeCharacter } from './genetics';
 import {
   isValidEndpoint,
   loadLlmSettings,
@@ -109,6 +110,10 @@ function update(next: Outfit): void {
   // including the ones arriving through the verification/agent
   // bridge — so the parameter ranges and the adult safety
   // restriction (character.ts, CUS-0779) hold on every path.
+  // A committed change also ends any genetics preview: the view
+  // is re-rendered from the new state below, so a previewed
+  // person must not linger as if still on offer.
+  blendChild = null;
   outfit = sanitizeOutfit(next);
   rig.setCharacter(outfit.character);
   stage.setSubjectHeight(outfit.character.height);
@@ -127,6 +132,11 @@ function update(next: Outfit): void {
  *  once, and the panel re-render on release shows the corrected
  *  slider positions — the correction is never silent. */
 function patchCharacter(patch: Partial<CharacterParams>): void {
+  // A slider edit likewise ends a genetics preview (the rig is
+  // re-rendered from the current person below). The preview block
+  // disappears at the next panel render; its apply button checks
+  // blendChild before doing anything.
+  blendChild = null;
   outfit = {
     ...outfit,
     character: sanitizeCharacter({ ...outfit.character, ...patch }),
@@ -151,6 +161,45 @@ interface ChatEntry {
   text: string;
 }
 const chatLog: ChatEntry[] = [];
+
+// ---- genetics: synthesize a new person from two seeds ----
+// (CHARACTER-SYSTEM.md §2.5; LEGAL-ETHICS.md judgment J-06.)
+// The two inputs are seeds of fictional people — the only kind
+// this app has. The synthesized person is previewed on the rig
+// without touching the saved state; only "use this person"
+// commits it, through update() and its sanitize gate like every
+// other path. Parentage is recorded nowhere: once applied, the
+// person is an ordinary character with an ordinary seed. The
+// form state is module state so it survives panel re-renders.
+let blendSeedA = '';
+let blendSeedB = '';
+let blendChild: CharacterParams | null = null;
+
+/** Show a person on the rig without committing it: the preview
+ *  path for a synthesized person (and, with the current person,
+ *  the way a preview is taken down). */
+function showCharacterPreview(c: CharacterParams): void {
+  rig.setCharacter(c);
+  stage.setSubjectHeight(c.height);
+  applyOutfit(rig, { ...outfit, character: c });
+}
+
+function onBlendGenerate(): void {
+  const pa = decodeSeed(blendSeedA);
+  const pb = decodeSeed(blendSeedB);
+  if (!pa || !pb) {
+    showToast(t('ui.seedInvalid'));
+    return;
+  }
+  // A fresh mix seed per press: re-rolling is the fun of it. The
+  // result is fully captured by the child's own seed, so nothing
+  // about the roll needs to be kept.
+  const mixSeed = Math.floor(Math.random() * 0x100000000) >>> 0;
+  blendChild = synthesizeCharacter(pa.character, pb.character, mixSeed);
+  showCharacterPreview(blendChild);
+  showToast(t('genetics.created'));
+  renderOptions();
+}
 
 function readSettingsForm(): LlmSettings {
   const get = (id: string) =>
@@ -475,6 +524,79 @@ function renderOptions(): void {
     const cardRow = el('div', 'seed-row');
     cardRow.append(chip(t('ui.cardLoad'), false, () => cardFileInput.click()));
     nodes.push(cardRow);
+
+    // genetics: synthesize a new person from two people's seeds
+    // (see the module-state block above). The result is presented
+    // as what it is — a new adult person — and previewed before
+    // it can be applied; nothing about the two inputs is kept.
+    nodes.push(el('span', 'group-label', t('genetics.title')));
+    nodes.push(el('p', 'llm-note', t('genetics.note')));
+    const blendRow = (
+      labelKey: I18nKey,
+      id: string,
+      value: string,
+      set: (v: string) => void,
+    ): HTMLDivElement => {
+      const row = el('div', 'seed-row');
+      const input = el('input', 'seed-input');
+      input.id = id;
+      input.type = 'text';
+      input.value = value;
+      input.placeholder = 'FR1-…';
+      input.setAttribute('aria-label', t(labelKey));
+      input.addEventListener('input', () => set(input.value));
+      const useBtn = chip(t('genetics.useCurrent'), false, () => {
+        set(encodeSeed(outfit));
+        renderOptions();
+      });
+      row.append(input, useBtn);
+      return row;
+    };
+    nodes.push(el('span', 'group-label', t('genetics.personA')));
+    nodes.push(
+      blendRow('genetics.personA', 'blend-seed-a', blendSeedA, (v) => {
+        blendSeedA = v;
+      }),
+    );
+    nodes.push(el('span', 'group-label', t('genetics.personB')));
+    nodes.push(
+      blendRow('genetics.personB', 'blend-seed-b', blendSeedB, (v) => {
+        blendSeedB = v;
+      }),
+    );
+    const genRow = el('div', 'seed-row');
+    const genBtn = chip(t('genetics.generate'), false, onBlendGenerate);
+    genBtn.id = 'blend-generate';
+    genRow.append(genBtn);
+    nodes.push(genRow);
+    if (blendChild) {
+      nodes.push(el('span', 'group-label', t('genetics.result')));
+      const childSeedRow = el('div', 'seed-row');
+      const childSeedVal = el(
+        'code',
+        'seed-value',
+        encodeSeed({ ...outfit, character: blendChild }),
+      );
+      childSeedVal.id = 'blend-child-seed';
+      childSeedRow.append(childSeedVal);
+      nodes.push(childSeedRow);
+      const actRow = el('div', 'seed-row');
+      const applyBtn = chip(t('genetics.apply'), false, () => {
+        if (!blendChild) return;
+        const child = blendChild;
+        blendChild = null;
+        update({ ...outfit, character: child });
+      });
+      applyBtn.id = 'blend-apply';
+      const cancelBtn = chip(t('genetics.cancel'), false, () => {
+        blendChild = null;
+        showCharacterPreview(outfit.character);
+        renderOptions();
+      });
+      cancelBtn.id = 'blend-cancel';
+      actRow.append(applyBtn, cancelBtn);
+      nodes.push(actRow);
+    }
   } else if (activeTab === 'tops') {
     for (const style of TOP_STYLES) {
       nodes.push(
