@@ -5,10 +5,17 @@ import { join } from 'node:path';
 // Product invariants, pinned as tests so they cannot silently rot:
 //  1. No money anywhere — no payment, donation, ad or subscription
 //     machinery in the shipped source, not even as an unused hook.
-//  2. No data leaves the device — no network APIs and no external
-//     URLs in the app source (everything is bundled or same-origin).
-// If a future change needs an exception, it must argue with mi first
-// and change this test deliberately, in the open.
+//  2. The creator holds no user data. The app ships with NO
+//     endpoint: the only network traffic allowed is to the LLM
+//     endpoint the *user* configures on their own device (added
+//     2026-11-20 at mi's explicit instruction — see
+//     docs/DESIGN.md §11 and docs/LLM-CONNECT.md). That exception
+//     is fenced in by the rules below: no hardcoded non-loopback
+//     URLs anywhere, and network calls confined to the single
+//     module that talks to the user's endpoint (src/llm.ts) plus
+//     the service worker's same-origin offline cache.
+// If a future change needs another exception, it must argue with
+// mi first and change this test deliberately, in the open.
 
 const ROOT = join(__dirname, '..');
 
@@ -30,15 +37,11 @@ const appFiles = [
 
 const texts = new Map(appFiles.map((f) => [f, readFileSync(f, 'utf8')]));
 const source = [...texts.values()].join('\n');
-// The service worker legitimately calls fetch() — but only for
-// same-origin requests (it is the offline cache). It is checked
-// separately below; every other file must not touch the network.
-const nonSwSource = [...texts.entries()]
-  .filter(([f]) => !f.endsWith('sw.js'))
-  .map(([, v]) => v)
-  .join('\n');
 
-describe('no money, no data leaves the device', () => {
+const isSw = (f: string) => f.endsWith('sw.js');
+const isLlmModule = (f: string) => f.endsWith(join('src', 'llm.ts'));
+
+describe('no money; data goes only to the user-configured endpoint', () => {
   it('contains no payment / donation / ads / subscription machinery', () => {
     const banned = [
       'stripe',
@@ -60,16 +63,37 @@ describe('no money, no data leaves the device', () => {
     }
   });
 
-  it('uses no network APIs and references no external URLs', () => {
-    for (const pattern of ['fetch(', 'XMLHttpRequest', 'sendBeacon', 'new WebSocket', 'https://', 'http://']) {
-      expect(nonSwSource).not.toContain(pattern);
+  it('hardcodes no endpoint URLs — loopback examples in placeholders are the only URLs', () => {
+    // Any absolute URL written in the source must be a loopback
+    // example (an input placeholder showing the shape of a local
+    // server address). A real remote endpoint in the code would
+    // mean the product phones somewhere by default — banned.
+    const urlPattern = /https?:\/\/[^\s"'`)<\]]+/g;
+    for (const [file, text] of texts) {
+      if (isSw(file)) continue;
+      for (const match of text.match(urlPattern) ?? []) {
+        expect(
+          match.startsWith('http://localhost') || match.startsWith('http://127.0.0.1'),
+          `${file} contains a non-loopback URL literal: ${match}`,
+        ).toBe(true);
+      }
     }
-    expect(source).not.toContain('https://');
-    expect(source).not.toContain('http://');
+  });
+
+  it('confines network calls to src/llm.ts and the service worker', () => {
+    for (const [file, text] of texts) {
+      if (isSw(file) || isLlmModule(file)) continue;
+      expect(text, `${file} must not call fetch`).not.toContain('fetch(');
+    }
+    // No other network API may appear anywhere, llm.ts included:
+    // the user's endpoint is reached with fetch, or not at all.
+    for (const pattern of ['XMLHttpRequest', 'sendBeacon', 'new WebSocket', 'EventSource']) {
+      expect(source).not.toContain(pattern);
+    }
   });
 
   it('the service worker only fetches same-origin requests', () => {
-    const sw = [...texts.entries()].find(([f]) => f.endsWith('sw.js'))?.[1] ?? '';
+    const sw = [...texts.entries()].find(([f]) => isSw(f))?.[1] ?? '';
     expect(sw).toContain('origin !== self.location.origin');
   });
 });

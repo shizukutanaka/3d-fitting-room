@@ -37,6 +37,15 @@ import {
   type CharacterParams,
 } from './character';
 import { decodeSeed, encodeSeed } from './seed';
+import {
+  isValidEndpoint,
+  loadLlmSettings,
+  requestCommands,
+  saveLlmSettings,
+  testConnection,
+  type LlmSettings,
+} from './llm';
+import { describeCommandProtocol, executeCommands, validateCommands } from './commands';
 
 const LANG_KEY = 'fitting-room.lang.v1';
 const canvas = document.getElementById('gl') as HTMLCanvasElement;
@@ -51,7 +60,7 @@ stage.scene.add(rig.root);
 stage.setSubjectHeight(outfit.character.height);
 applyOutfit(rig, outfit);
 
-type TabId = 'character' | 'tops' | 'hat' | 'glasses' | 'accessory' | 'pose';
+type TabId = 'character' | 'tops' | 'hat' | 'glasses' | 'accessory' | 'pose' | 'llm';
 const TABS: Array<{ id: TabId; key: I18nKey }> = [
   { id: 'character', key: 'cat.character' },
   { id: 'tops', key: 'cat.tops' },
@@ -59,6 +68,7 @@ const TABS: Array<{ id: TabId; key: I18nKey }> = [
   { id: 'glasses', key: 'cat.glasses' },
   { id: 'accessory', key: 'cat.accessory' },
   { id: 'pose', key: 'cat.pose' },
+  { id: 'llm', key: 'cat.llm' },
 ];
 let activeTab: TabId = 'tops';
 
@@ -92,6 +102,109 @@ function patchCharacter(patch: Partial<CharacterParams>): void {
   saveOutfit(outfit);
   const seedEl = document.getElementById('seed-value');
   if (seedEl) seedEl.textContent = encodeSeed(outfit);
+}
+
+// ---- bring-your-own-LLM (docs/LLM-CONNECT.md) ----
+// Settings live only in this device's localStorage; until the
+// user saves an endpoint, nothing in this section makes a network
+// request. The chat log is module state so it survives the panel
+// re-renders that outfit changes trigger.
+let llmSettings: LlmSettings = loadLlmSettings();
+let llmBusy = false;
+let llmStatus: { kind: 'ok' | 'ng'; text: string } | null = null;
+interface ChatEntry {
+  who: 'you' | 'ai' | 'sys';
+  text: string;
+}
+const chatLog: ChatEntry[] = [];
+
+function readSettingsForm(): LlmSettings {
+  const get = (id: string) =>
+    (document.getElementById(id) as HTMLInputElement | null)?.value.trim() ?? '';
+  return {
+    endpoint: get('llm-endpoint'),
+    apiKey: get('llm-apikey'),
+    model: get('llm-model'),
+  };
+}
+
+function onSaveSettings(): void {
+  const candidate = readSettingsForm();
+  if (candidate.endpoint && !isValidEndpoint(candidate.endpoint)) {
+    llmStatus = { kind: 'ng', text: t('llm.invalidEndpoint') };
+    renderOptions();
+    return;
+  }
+  llmSettings = candidate;
+  saveLlmSettings(llmSettings);
+  llmStatus = { kind: 'ok', text: t('llm.saved') };
+  renderOptions();
+}
+
+async function onTestConnection(): Promise<void> {
+  const candidate = readSettingsForm();
+  llmBusy = true;
+  llmStatus = { kind: 'ok', text: t('llm.testing') };
+  renderOptions();
+  const result = await testConnection(candidate);
+  llmBusy = false;
+  llmStatus = result.ok
+    ? {
+        kind: 'ok',
+        text: result.models.length
+          ? `${t('llm.testOk')}: ${result.models.join(', ')}`
+          : t('llm.testOk'),
+      }
+    : { kind: 'ng', text: `${t('llm.testFail')}: ${result.error}` };
+  renderOptions();
+}
+
+async function onSendChat(): Promise<void> {
+  const input = document.getElementById('llm-chat-input') as HTMLInputElement | null;
+  const text = input?.value.trim() ?? '';
+  if (!text || llmBusy) return;
+  chatLog.push({ who: 'you', text });
+  if (!llmSettings.endpoint) {
+    chatLog.push({ who: 'sys', text: t('llm.notConfigured') });
+    renderOptions();
+    return;
+  }
+  if (!llmSettings.model.trim()) {
+    chatLog.push({ who: 'sys', text: t('llm.modelMissing') });
+    renderOptions();
+    return;
+  }
+  llmBusy = true;
+  renderOptions();
+  try {
+    const outcome = await requestCommands(llmSettings, outfit, text, getLang());
+    if (outcome.reply) chatLog.push({ who: 'ai', text: outcome.reply });
+    const { validation } = outcome;
+    if (validation.commands.length) {
+      const exec = executeCommands(validation.commands, outfit);
+      if (validation.commands.some((c) => c.type !== 'get_state')) update(exec.outfit);
+      if (exec.applied.length) {
+        chatLog.push({ who: 'sys', text: `${t('llm.applied')}: ${exec.applied.join('; ')}` });
+      }
+      if (exec.stateRequested) {
+        chatLog.push({ who: 'sys', text: JSON.stringify(outfit) });
+      }
+      if (exec.wantShareCard) void exportPhoto();
+    }
+    if (validation.rejected.length) {
+      chatLog.push({
+        who: 'sys',
+        text: `${t('llm.rejected')}: ${validation.rejected.map((r) => r.reason).join('; ')}`,
+      });
+    }
+  } catch (err) {
+    chatLog.push({
+      who: 'sys',
+      text: `${t('llm.error')}: ${err instanceof Error ? err.message : String(err)}`,
+    });
+  }
+  llmBusy = false;
+  renderOptions();
 }
 
 function chip(label: string, selected: boolean, onClick: () => void): HTMLButtonElement {
@@ -281,6 +394,70 @@ function renderOptions(): void {
         chip(t(key('pose', id)), outfit.pose === id, () => update({ ...outfit, pose: id })),
       );
     }
+  } else if (activeTab === 'llm') {
+    const block = el('div', 'llm-block');
+    block.append(el('span', 'group-label', t('llm.settingsTitle')));
+    const formRow = (labelKey: I18nKey, id: string, value: string, placeholder: string, type = 'text') => {
+      const row = el('div', 'form-row');
+      const label = el('label', 'form-label', t(labelKey));
+      label.htmlFor = id;
+      const input = el('input', 'form-input');
+      input.id = id;
+      input.type = type;
+      input.value = value;
+      input.placeholder = placeholder;
+      input.autocomplete = 'off';
+      row.append(label, input);
+      return row;
+    };
+    block.append(
+      formRow('llm.endpoint', 'llm-endpoint', llmSettings.endpoint, 'http://localhost:11434/v1'),
+    );
+    block.append(formRow('llm.apiKey', 'llm-apikey', llmSettings.apiKey, '', 'password'));
+    block.append(formRow('llm.model', 'llm-model', llmSettings.model, 'llama3.1'));
+    const btnRow = el('div', 'chat-row');
+    const saveBtn = chip(t('llm.save'), false, onSaveSettings);
+    saveBtn.id = 'llm-save';
+    const testBtn = chip(t('llm.test'), false, () => void onTestConnection());
+    testBtn.id = 'llm-test';
+    testBtn.disabled = llmBusy;
+    btnRow.append(saveBtn, testBtn);
+    if (llmStatus) {
+      btnRow.append(el('span', `llm-status ${llmStatus.kind}`, llmStatus.text));
+    }
+    block.append(btnRow);
+    block.append(el('p', 'llm-note', t('llm.note')));
+
+    block.append(el('span', 'group-label', t('llm.chatTitle')));
+    const log = el('div', 'chat-log');
+    log.id = 'llm-chat-log';
+    for (const entry of chatLog) {
+      const msg = el('div', `chat-msg ${entry.who}`);
+      const who = el('span', 'who', entry.who === 'you' ? t('llm.you') : entry.who === 'ai' ? t('llm.ai') : '>');
+      msg.append(who, document.createTextNode(entry.text));
+      log.append(msg);
+    }
+    if (llmBusy) {
+      const msg = el('div', 'chat-msg sys');
+      msg.append(el('span', 'who', '>'), document.createTextNode(t('llm.thinking')));
+      log.append(msg);
+    }
+    block.append(log);
+    const chatRow = el('div', 'chat-row');
+    const chatInput = el('input', 'form-input');
+    chatInput.id = 'llm-chat-input';
+    chatInput.type = 'text';
+    chatInput.placeholder = t('llm.chatPlaceholder');
+    chatInput.setAttribute('aria-label', t('llm.chatTitle'));
+    chatInput.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') void onSendChat();
+    });
+    const sendBtn = chip(t('llm.send'), false, () => void onSendChat());
+    sendBtn.id = 'llm-send';
+    sendBtn.disabled = llmBusy;
+    chatRow.append(chatInput, sendBtn);
+    block.append(chatRow);
+    nodes.push(block);
   }
   box.replaceChildren(...nodes);
 }
@@ -380,6 +557,20 @@ interface FittingRoomBridge {
   getSeed(): string;
   setSeed(seed: string): boolean;
   cardDataURL(): Promise<string>;
+  /** The agent connection point (docs/LLM-CONNECT.md): the same
+   *  command protocol the LLM chat uses. Input is untrusted —
+   *  every command passes validateCommands, exactly as model
+   *  output does. A share_card command is reported back via
+   *  wantShareCard instead of triggering a download; call
+   *  cardDataURL() for the image. */
+  runCommands(raw: unknown): {
+    applied: string[];
+    rejected: Array<{ reason: string }>;
+    wantShareCard: boolean;
+    outfit: Outfit;
+  };
+  /** The command protocol description, generated from the specs. */
+  commandSpec(): string;
 }
 const bridge: FittingRoomBridge = {
   ready: true,
@@ -392,6 +583,23 @@ const bridge: FittingRoomBridge = {
     update(decoded);
     return true;
   },
+  runCommands: (raw) => {
+    const list = Array.isArray(raw)
+      ? raw
+      : typeof raw === 'object' && raw !== null && Array.isArray((raw as { commands?: unknown }).commands)
+        ? (raw as { commands: unknown[] }).commands
+        : raw;
+    const validation = validateCommands(list);
+    const exec = executeCommands(validation.commands, outfit);
+    if (validation.commands.some((c) => c.type !== 'get_state')) update(exec.outfit);
+    return {
+      applied: exec.applied,
+      rejected: validation.rejected.map((r) => ({ reason: r.reason })),
+      wantShareCard: exec.wantShareCard,
+      outfit: { ...outfit },
+    };
+  },
+  commandSpec: () => describeCommandProtocol(),
   cardDataURL: async () => {
     stage.renderer.render(stage.scene, stage.camera);
     const blob = await composeShareCard(canvas, {
