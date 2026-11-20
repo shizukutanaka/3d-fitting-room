@@ -97,6 +97,7 @@ import {
   type GeneratedImage,
   type ImagingSettings,
 } from './imaging';
+import { createVrRig, vrActionId, type VrLookEntry, type VrRig } from './vr';
 
 const LANG_KEY = 'fitting-room.lang.v1';
 const canvas = document.getElementById('gl') as HTMLCanvasElement;
@@ -105,6 +106,10 @@ setLang(detectLang(localStorage.getItem(LANG_KEY)));
 document.documentElement.lang = getLang();
 
 const stage = createStage(canvas);
+// The VR rig (vr.ts) is created near the bottom, once every
+// host function it calls exists; outfit changes reach it
+// through update() below, null-safely until then.
+let vrRig: VrRig | null = null;
 // The roster is the save system (roster.ts): the person on
 // stage is the roster's current entry, and every change is
 // autosaved back into that entry. The first load migrates the
@@ -233,6 +238,10 @@ function update(next: Outfit): void {
   applyOutfit(rig, outfit);
   persist();
   renderOptions();
+  // The VR panel shows the same state; a committed change
+  // re-lays its selection highlights (a no-op cost on the flat
+  // screen, where presses are discrete events anyway).
+  vrRig?.refreshPanel();
 }
 
 /** Live character patch for sliders: applies and persists without
@@ -1674,6 +1683,8 @@ document.getElementById('lang-toggle')!.addEventListener('click', () => {
   applyStaticTexts();
   renderTabs();
   renderOptions();
+  vrRig?.refreshPanel();
+  renderVrButton();
 });
 
 window.addEventListener('resize', () => stage.resize());
@@ -1690,17 +1701,257 @@ applyStaticTexts();
 renderTabs();
 renderOptions();
 
+// ---- VR dress-up (WebXR) — the product's main act ----
+// The user stands in the room (scene.ts places the player rig
+// at the spawn point while presenting) and dresses the person
+// from the panel beside the rack (vr.ts). Every press flows
+// back into the same state paths the flat UI uses: outfit
+// patches go through update() and its sanitize gate, looks are
+// read from the saved-looks store, and the photo is the share
+// card. Nothing about the person in VR bypasses the gates the
+// flat screen lives under.
+
+// Saved looks live in the looks store (localStorage, written
+// by the flat UI's looks shelf). The VR panel reads the store
+// directly on every refresh, so the two surfaces can never
+// disagree about what is saved. Entries are re-validated on
+// the way in, and applying one merges its clothing fields over
+// the current outfit — through update(), so the sanitize gate
+// decides what a stored look may name (fields this build does
+// not know are dropped there, never smuggled).
+const LOOKS_STORAGE_KEY = 'fitting-room.looks.v1';
+
+interface StoredLook {
+  id: string;
+  name: string;
+  look: Record<string, unknown>;
+}
+
+function readStoredLooks(): StoredLook[] {
+  try {
+    const raw = localStorage.getItem(LOOKS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const out: StoredLook[] = [];
+    for (const entry of parsed) {
+      if (typeof entry !== 'object' || entry === null) continue;
+      const e = entry as Record<string, unknown>;
+      if (typeof e.id !== 'string' || !e.id) continue;
+      if (typeof e.name !== 'string' || !e.name.trim()) continue;
+      if (typeof e.look !== 'object' || e.look === null) continue;
+      out.push({ id: e.id, name: e.name, look: e.look as Record<string, unknown> });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+function applyStoredLook(id: string): void {
+  const entry = readStoredLooks().find((l) => l.id === id);
+  if (!entry) return;
+  update({ ...outfit, ...(entry.look as Partial<Outfit>) });
+}
+
+// The VR photo: the share card, composed from a dedicated
+// camera at the flat home framing (the same angle the flat
+// photo shows), rendered offscreen. While presenting, three.js
+// swaps any render's camera for the XR camera, so for this one
+// render XR is switched off and back on inside the same frame
+// callback — no headset frame is produced in between. The card
+// itself is the ordinary share card (composeShareCardFromImage
+// is the same composition the generated-image card uses), seed
+// embedded and printed as always.
+const VR_PHOTO_W = 600;
+const VR_PHOTO_H = 750;
+const vrPhotoTarget = new THREE.WebGLRenderTarget(VR_PHOTO_W, VR_PHOTO_H);
+const vrPhotoCam = new THREE.PerspectiveCamera(40, VR_PHOTO_W / VR_PHOTO_H, 0.1, 60);
+let vrPhotoRequested = false;
+
+async function composeVrPhotoCard(): Promise<Blob> {
+  const h = outfit.character.height;
+  vrPhotoCam.position.set(0, h * 0.76, 3.9);
+  vrPhotoCam.lookAt(0, h * 0.54, 0);
+  vrPhotoCam.updateMatrixWorld();
+  const renderer = stage.renderer;
+  const wasXrEnabled = renderer.xr.enabled;
+  if (stage.isPresenting()) renderer.xr.enabled = false;
+  const prevTarget = renderer.getRenderTarget();
+  renderer.setRenderTarget(vrPhotoTarget);
+  renderer.render(stage.scene, vrPhotoCam);
+  const pixels = new Uint8Array(VR_PHOTO_W * VR_PHOTO_H * 4);
+  renderer.readRenderTargetPixels(vrPhotoTarget, 0, 0, VR_PHOTO_W, VR_PHOTO_H, pixels);
+  renderer.setRenderTarget(prevTarget);
+  if (stage.isPresenting()) renderer.xr.enabled = wasXrEnabled;
+
+  // readRenderTargetPixels is bottom-up; flip into a 2D canvas.
+  const c2 = document.createElement('canvas');
+  c2.width = VR_PHOTO_W;
+  c2.height = VR_PHOTO_H;
+  const ctx = c2.getContext('2d');
+  if (!ctx) throw new Error('2d context unavailable');
+  const imgData = ctx.createImageData(VR_PHOTO_W, VR_PHOTO_H);
+  const rowBytes = VR_PHOTO_W * 4;
+  for (let y = 0; y < VR_PHOTO_H; y++) {
+    imgData.data.set(
+      pixels.subarray((VR_PHOTO_H - 1 - y) * rowBytes, (VR_PHOTO_H - y) * rowBytes),
+      y * rowBytes,
+    );
+  }
+  ctx.putImageData(imgData, 0, 0);
+  const img = new Image();
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve();
+    img.onerror = () => reject(new Error('vr photo image could not be loaded'));
+    img.src = c2.toDataURL('image/png');
+  });
+  return composeShareCardFromImage(img, {
+    appName: t('app.title'),
+    workingTitleNote: t('app.workingTitle'),
+    tagline: t('app.tagline'),
+    seed: encodeSeed(outfit),
+    name: outfit.name,
+  });
+}
+
+async function deliverVrPhoto(): Promise<void> {
+  try {
+    const blob = await composeVrPhotoCard();
+    downloadBlob(blob, '3d-fitting-room.png');
+    showToast(t('ui.saved'));
+  } catch {
+    showToast(t('vr.sessionError'));
+  }
+}
+
+function takeVrPhoto(): void {
+  // Inside the headset the render must happen inside the frame
+  // callback (the loop picks the flag up); on the flat screen
+  // it can go right away.
+  if (stage.isPresenting()) {
+    vrPhotoRequested = true;
+  } else {
+    void deliverVrPhoto();
+  }
+}
+
+vrRig = createVrRig(stage, {
+  getOutfit: () => outfit,
+  applyPatch: (patch) => update({ ...outfit, ...patch }),
+  getLooks: (): VrLookEntry[] => readStoredLooks().map((l) => ({ id: l.id, name: l.name })),
+  applyLook: applyStoredLook,
+  takePhoto: takeVrPhoto,
+});
+
+// The "VRで入る" entry: shown only when an immersive-vr session
+// is actually available; where it is not, a note says why (the
+// flat experience is untouched either way). The check is the
+// platform's own — no headset is assumed, none is simulated.
+type VrSupport = 'unknown' | 'supported' | 'unsupported';
+let vrSupport: VrSupport = 'unknown';
+let xrSession: XRSession | null = null;
+
+function renderVrButton(): void {
+  const btn = document.getElementById('btn-vr') as HTMLButtonElement | null;
+  const note = document.getElementById('vr-note') as HTMLElement | null;
+  if (btn) {
+    btn.hidden = vrSupport !== 'supported';
+    btn.textContent = stage.isPresenting() ? t('vr.exit') : t('vr.enter');
+  }
+  if (note) {
+    note.hidden = vrSupport !== 'unsupported';
+    if (vrSupport === 'unsupported') note.textContent = t('vr.unsupported');
+  }
+}
+
+async function initVrEntry(): Promise<void> {
+  let supported = false;
+  if (navigator.xr) {
+    try {
+      supported = await navigator.xr.isSessionSupported('immersive-vr');
+    } catch {
+      supported = false;
+    }
+  }
+  vrSupport = supported ? 'supported' : 'unsupported';
+  renderVrButton();
+}
+
+async function onVrButton(): Promise<void> {
+  if (stage.isPresenting()) {
+    try {
+      await xrSession?.end();
+    } catch {
+      // Already ended from the headset side.
+    }
+    return;
+  }
+  if (!navigator.xr || vrSupport !== 'supported') return;
+  // XR pixel-ratio discipline: the session's framebuffer is
+  // created from the canvas drawing buffer when the session
+  // starts, so the ratio is lowered *before* the request and
+  // restored when the session ends (standalone headsets render
+  // per eye at frame rate; the flat screen's up-to-2x buffer is
+  // fill cost the room does not need twice).
+  const prevRatio = stage.renderer.getPixelRatio();
+  stage.renderer.setPixelRatio(1);
+  stage.resize();
+  let session: XRSession | null = null;
+  try {
+    session = await navigator.xr.requestSession('immersive-vr', {
+      optionalFeatures: ['local-floor', 'bounded-floor'],
+    });
+    xrSession = session;
+    session.addEventListener('end', () => {
+      xrSession = null;
+      stage.renderer.setPixelRatio(prevRatio);
+      stage.resize();
+      renderVrButton();
+    });
+    await stage.renderer.xr.setSession(session);
+  } catch {
+    if (session) {
+      try {
+        await session.end();
+      } catch {
+        // Nothing to end.
+      }
+      xrSession = null;
+    }
+    stage.renderer.setPixelRatio(prevRatio);
+    stage.resize();
+    showToast(t('vr.sessionError'));
+  }
+  renderVrButton();
+}
+
+document.getElementById('btn-vr')!.addEventListener('click', () => {
+  void onVrButton();
+});
+stage.renderer.xr.addEventListener('sessionstart', renderVrButton);
+stage.renderer.xr.addEventListener('sessionend', renderVrButton);
+void initVrEntry();
+
 const clock = new THREE.Clock();
+const gazePos = new THREE.Vector3();
 function loop(): void {
   const tSec = clock.getElapsedTime();
-  // The camera position is the gaze target: the avatar's eyes
-  // track whoever is looking at it (see avatar.ts gaze).
-  rig.tick(tSec, stage.camera.position);
+  // The camera's world position is the gaze target: the
+  // avatar's eyes track whoever is looking at it (see avatar.ts
+  // gaze) — on the flat screen that is the orbit camera, in VR
+  // it is the user's head.
+  stage.camera.getWorldPosition(gazePos);
+  rig.tick(tSec, gazePos);
   stage.tick(tSec);
+  vrRig?.update();
   stage.renderer.render(stage.scene, stage.camera);
-  requestAnimationFrame(loop);
+  if (vrPhotoRequested) {
+    vrPhotoRequested = false;
+    void deliverVrPhoto();
+  }
 }
-requestAnimationFrame(loop);
+stage.renderer.setAnimationLoop(loop);
 
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').catch(() => {
@@ -1774,6 +2025,36 @@ interface FittingRoomBridge {
     restoredNotice: boolean;
     history: LineageEvent[];
   };
+  /** VR state for verification: whether immersive-vr reported
+   *  itself supported, whether a session is presenting, the
+   *  panel's pressable buttons (by action id), where the player
+   *  rig stands, and the last action the panel dispatched. A
+   *  real session needs a headset — what headless checks can
+   *  honestly confirm is the detection, the panel and the
+   *  dispatch path, not the immersion. */
+  getVrState(): {
+    support: string;
+    presenting: boolean;
+    qualityLevel: number;
+    panelButtons: number;
+    panelActionIds: string[];
+    playerPosition: [number, number, number];
+    playerRotationY: number;
+    lastAction: string | null;
+  };
+  /** Press a VR panel button by its action id, through the
+   *  same dispatch a controller select event uses. */
+  vrPress(actionId: string): boolean;
+  /** The VR photo card (the dedicated-camera composition the
+   *  panel's photo button downloads) as a data URL. */
+  vrPhotoDataURL(): Promise<string | null>;
+  /** Draw-call measurement from the stage (scene.ts): one
+   *  frame with the mirror's reflection pass and without it. */
+  measureStageStats(): { withMirror: number; withoutMirror: number; triangles: number };
+  /** Aim the flat camera at the VR panel (evidence framing;
+   *  the panel is furniture beside the rack, so the default
+   *  home view does not show it). */
+  viewVrPanel(): void;
 }
 const bridge: FittingRoomBridge = {
   ready: true,
@@ -1887,6 +2168,38 @@ const bridge: FittingRoomBridge = {
     const a = (angleDeg * Math.PI) / 180;
     stage.camera.position.set(p.x + Math.sin(a) * r, p.y + 0.01, p.z + Math.cos(a) * r);
     stage.controls.target.copy(p);
+    stage.controls.update();
+  },
+  getVrState: () => ({
+    support: vrSupport,
+    presenting: stage.isPresenting(),
+    qualityLevel: stage.xrQualityLevel(),
+    panelButtons: vrRig ? vrRig.panel.targets.length : 0,
+    panelActionIds: vrRig
+      ? vrRig.panel.targets.map((o) => String(o.userData.actionId ?? ''))
+      : [],
+    playerPosition: [
+      stage.player.position.x,
+      stage.player.position.y,
+      stage.player.position.z,
+    ] as [number, number, number],
+    playerRotationY: stage.player.rotation.y,
+    lastAction: vrRig?.lastAction ? vrActionId(vrRig.lastAction) : null,
+  }),
+  vrPress: (actionId) => (vrRig ? vrRig.press(actionId) : false),
+  vrPhotoDataURL: async () => {
+    const blob = await composeVrPhotoCard();
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+  },
+  measureStageStats: () => stage.measureDrawCalls(),
+  viewVrPanel: () => {
+    stage.camera.position.set(0.55, 1.6, 1.85);
+    stage.controls.target.set(-1.35, 1.25, -0.45);
     stage.controls.update();
   },
 };

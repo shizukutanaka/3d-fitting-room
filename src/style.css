@@ -290,6 +290,22 @@ body {
   text-align: center;
 }
 
+/* The VR entry: present only where WebXR can actually enter
+   (main.ts unhides it after the support check); where it cannot,
+   the note below explains why instead of a dead button. */
+#btn-vr {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+#vr-note {
+  margin: 8px 2px 0;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  text-align: center;
+}
+
 /* ---- mutation candidates + restored-person notice ---- */
 
 .chip.primary {

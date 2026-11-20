@@ -10,12 +10,27 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import { fabricTextures, plasterTexture, woodFloorTexture } from './textures';
+import { XR_QUALITY_STEPS, nextXrQualityLevel } from './vr';
 
 export interface Stage {
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
   renderer: THREE.WebGLRenderer;
   controls: OrbitControls;
+  /** The XR player rig: the camera (and the VR controllers) are
+   *  parented to this group, so moving/rotating it moves the
+   *  viewpoint in VR. At the identity transform on the flat
+   *  screen, so the flat framing is exactly what it always was.
+   *  On session start it is placed at the spawn point in front
+   *  of the podium; snap turns (vr.ts) orbit it around the
+   *  podium. */
+  player: THREE.Group;
+  /** Whether an immersive VR session is currently presenting. */
+  isPresenting(): boolean;
+  /** The XR quality ladder's current level (vr.ts): 0 on the
+   *  flat screen and at session start; steps down on its own
+   *  while presenting if frame times stay over budget. */
+  xrQualityLevel(): number;
   tick(timeSec: number): void;
   resize(): void;
   resetView(): void;
@@ -23,7 +38,24 @@ export interface Stage {
    *  the camera's home position and orbit target track it, and the
    *  mirror grows/shrinks so it always covers the full figure. */
   setSubjectHeight(heightM: number): void;
+  /** Draw-call cost of one frame, measured on the spot: with the
+   *  mirror's reflection pass and without it. The mirror roughly
+   *  doubles the scene's draw calls — the number the XR mirror
+   *  resolution decision (below) is based on. */
+  measureDrawCalls(): { withMirror: number; withoutMirror: number; triangles: number };
 }
+
+/** Where a VR user starts: standing on the floor 1.9 m in front
+ *  of the podium, facing the person. local-floor puts the
+ *  play-space origin at the user's floor point, so the player
+ *  rig is offset by this much and the person is at eye range. */
+export const XR_SPAWN = { x: 0, z: 1.9 };
+/** Mirror reflection resolution: full on the flat screen (the
+ *  share photo is the product's calling card), halved per side
+ *  in XR, where the reflection pass is paid per eye at headset
+ *  frame rates. See DESIGN.md §22. */
+export const MIRROR_FLAT_PX = 1024;
+export const MIRROR_XR_PX = 512;
 
 function mesh(geo: THREE.BufferGeometry, material: THREE.Material, x = 0, y = 0, z = 0): THREE.Mesh {
   const m = new THREE.Mesh(geo, material);
@@ -44,6 +76,12 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.1;
+  // WebXR: VR dress-up is the product's main act (mi's
+  // direction). The session itself is requested from main.ts
+  // (the button lives there); the stage only prepares the
+  // renderer and reacts to the session starting/ending.
+  renderer.xr.enabled = true;
+  renderer.xr.setReferenceSpaceType('local-floor');
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#241f1c');
@@ -62,6 +100,16 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
 
   const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 60);
   camera.position.copy(homePos());
+
+  // The player rig: in VR the headset pose is expressed in the
+  // camera's parent space, so the camera (and, in vr.ts, the
+  // controllers) ride on this group. Identity on the flat
+  // screen; placed at the spawn point while presenting.
+  const player = new THREE.Group();
+  player.name = 'player';
+  scene.add(player);
+  player.add(camera);
+  let presenting = false;
 
   const controls = new OrbitControls(camera, canvas);
   controls.target.copy(homeTarget());
@@ -170,6 +218,13 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
   }
   const backBase = mesh(new THREE.BoxGeometry(13, 0.09, 0.02), trimMat, 0, 0.045, -2.58);
   scene.add(backBase);
+  // Ceiling: on the flat screen the camera never looks up past
+  // the wall tops, but in VR the user stands *inside* the room
+  // and does. A plain plaster slab at wall height closes the
+  // room; without it the headset shows the background void.
+  const ceiling = mesh(new THREE.PlaneGeometry(13, 10), wallMat, 0, 3.8, 0.6);
+  ceiling.rotation.x = Math.PI / 2;
+  scene.add(ceiling);
   // panel moulding on the back wall + a picture rail
   for (const x of [-3.4, -1.9, 1.9, 3.4]) {
     scene.add(mesh(new THREE.BoxGeometry(0.05, 3.2, 0.018), trimMat, x, 1.75, -2.585));
@@ -179,8 +234,8 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
   // ---- the mirror (a real reflection — it is a fitting room) ----
   const mirror = new Reflector(new THREE.PlaneGeometry(1.5, 2.3), {
     clipBias: 0.003,
-    textureWidth: 1024,
-    textureHeight: 1024,
+    textureWidth: MIRROR_FLAT_PX,
+    textureHeight: MIRROR_FLAT_PX,
     color: 0xc9ced2,
   });
   mirror.position.set(0, 1.42, -2.575);
@@ -331,13 +386,148 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
     subjectHeight = heightM;
     layoutMirror(heightM);
     controls.target.y = heightM * 0.54;
-    camera.position.y = heightM * 0.76;
+    // While presenting, the flat camera's local position is not
+    // the viewpoint (the headset is); moving it would only
+    // disturb the framing the user returns to.
+    if (!presenting) camera.position.y = heightM * 0.76;
+  }
+
+  function setMirrorResolution(px: number): void {
+    mirror.getRenderTarget().setSize(px, px);
+  }
+
+  // ---- XR quality ladder (WORLD-CLASS.md M2) ----
+  // The ladder's steps and decision rule are pure logic in
+  // vr.ts; the stage applies them. Level 0 is the session-start
+  // state (and must agree with MIRROR_XR_PX above). While
+  // presenting, tick() averages frame times over a window and
+  // steps the level before the frame rate breaks; on end,
+  // everything is restored, so the flat screen resumes exactly
+  // where it was.
+  let xrQuality = 0;
+  let frameTimeSum = 0;
+  let frameCount = 0;
+  let lastFrameAt = -1;
+  const XR_EVAL_FRAMES = 90;
+
+  function applyXrQuality(level: number): void {
+    const step = XR_QUALITY_STEPS[level];
+    if (step.mirrorPx === null) {
+      mirror.visible = false;
+    } else {
+      mirror.visible = true;
+      setMirrorResolution(step.mirrorPx);
+    }
+    key.castShadow = step.shadows;
+    try {
+      renderer.xr.setFoveation(step.foveation);
+    } catch {
+      // Foveation is an optimization where the platform offers
+      // it; absence is not an error.
+    }
+  }
+
+  function resetFrameSampling(): void {
+    frameTimeSum = 0;
+    frameCount = 0;
+    lastFrameAt = -1;
+  }
+
+  // ---- XR session lifecycle ----
+  // On start: the player rig goes to the spawn point in front
+  // of the podium, the orbit controls stand down (the headset
+  // owns the camera), and the quality ladder takes its top step
+  // (mirror at XR resolution, fixed foveation trimming the
+  // periphery on standalone headsets).
+  renderer.xr.addEventListener('sessionstart', () => {
+    presenting = true;
+    player.position.set(XR_SPAWN.x, 0, XR_SPAWN.z);
+    player.rotation.set(0, 0, 0);
+    controls.enabled = false;
+    xrQuality = 0;
+    resetFrameSampling();
+    applyXrQuality(0);
+  });
+  renderer.xr.addEventListener('sessionend', () => {
+    presenting = false;
+    player.position.set(0, 0, 0);
+    player.rotation.set(0, 0, 0);
+    controls.enabled = true;
+    xrQuality = 0;
+    resetFrameSampling();
+    mirror.visible = true;
+    key.castShadow = true;
+    setMirrorResolution(MIRROR_FLAT_PX);
+    try {
+      renderer.xr.setFoveation(1);
+    } catch {
+      // Same as above.
+    }
+  });
+
+  function measureDrawCalls(): { withMirror: number; withoutMirror: number; triangles: number } {
+    const wasMirrorVisible = mirror.visible;
+    const wasAutoReset = renderer.info.autoReset;
+    // The Reflector re-renders the scene from the mirrored
+    // camera *inside* the main render, and renderer.info resets
+    // per render by default — so a naive read counts only the
+    // tail of the mirrored frame. With autoReset off, the
+    // counter accumulates honestly across both passes.
+    renderer.info.autoReset = false;
+    mirror.visible = false;
+    renderer.info.reset();
+    renderer.render(scene, camera);
+    const withoutMirror = renderer.info.render.calls;
+    const triangles = renderer.info.render.triangles;
+    mirror.visible = true;
+    renderer.info.reset();
+    renderer.render(scene, camera);
+    const withMirror = renderer.info.render.calls;
+    mirror.visible = wasMirrorVisible;
+    renderer.info.autoReset = wasAutoReset;
+    renderer.info.reset();
+    return { withMirror, withoutMirror, triangles };
   }
 
   function tick(): void {
-    controls.update();
+    // In VR the headset owns the camera; the orbit controls
+    // would fight it for the same transform.
+    if (!presenting) {
+      controls.update();
+      return;
+    }
+    // Feed the quality ladder: windowed average frame time
+    // (CPU-side, measured between ticks — a proxy for frame
+    // cost, not a GPU timer; see DESIGN.md §22).
+    const now = performance.now();
+    if (lastFrameAt >= 0) {
+      frameTimeSum += now - lastFrameAt;
+      frameCount += 1;
+      if (frameCount >= XR_EVAL_FRAMES) {
+        const next = nextXrQualityLevel(xrQuality, frameTimeSum / frameCount);
+        resetFrameSampling();
+        if (next !== xrQuality) {
+          xrQuality = next;
+          applyXrQuality(next);
+        }
+      }
+    }
+    lastFrameAt = now;
   }
 
   resize();
-  return { scene, camera, renderer, controls, tick, resize, resetView, setSubjectHeight };
+  return {
+    scene,
+    camera,
+    renderer,
+    controls,
+    player,
+    isPresenting: () => presenting,
+    xrQualityLevel: () => xrQuality,
+    tick,
+    resize,
+    resetView,
+    setSubjectHeight,
+    measureDrawCalls,
+  };
 }
