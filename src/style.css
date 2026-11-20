@@ -366,6 +366,29 @@ body {
   align-items: center;
 }
 
+/* ---- image generation (bring-your-own SD) ---- */
+
+.sd-prompt {
+  border: 2px solid var(--accent-soft);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  line-height: 1.5;
+  background: rgba(55, 49, 43, 0.04);
+  color: var(--ink);
+  min-height: 54px;
+  resize: vertical;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.sd-result-img {
+  width: 100%;
+  border-radius: 12px;
+  display: block;
+}
+
 @media (min-width: 900px) {
   #panel {
     left: auto;

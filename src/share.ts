@@ -23,12 +23,20 @@ export interface ShareCardOptions {
   seed: string;
 }
 
-/** Compose the share card and return it as a PNG blob with the
- *  seed embedded. */
-export async function composeShareCard(
-  glCanvas: HTMLCanvasElement,
-  opts: ShareCardOptions,
-): Promise<Blob> {
+type PhotoDrawer = (
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  photo: number,
+) => void;
+
+/** The card layout, shared by the 3D-rendering card and the
+ *  generated-image card: only how the photo area is filled
+ *  differs. The seed treatment (embedded chunk + printed string
+ *  + fictional-person note) is identical, so a generated image
+ *  of a person travels with exactly the same restore path as a
+ *  rendering of them. */
+async function composeCard(drawPhoto: PhotoDrawer, opts: ShareCardOptions): Promise<Blob> {
   const card = document.createElement('canvas');
   card.width = CARD_SIZE;
   card.height = CARD_SIZE;
@@ -42,20 +50,17 @@ export async function composeShareCard(
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, CARD_SIZE, CARD_SIZE);
 
-  // photo area: center-crop the WebGL canvas into a rounded square
-  // (slightly smaller than the original layout: the footer now also
-  // carries the printed seed and the fictional-person note)
+  // photo area: a rounded square (slightly smaller than the
+  // original layout: the footer also carries the printed seed
+  // and the fictional-person note)
   const photo = 800;
   const px = (CARD_SIZE - photo) / 2;
   const py = 44;
-  const srcSide = Math.min(glCanvas.width, glCanvas.height);
-  const sx = (glCanvas.width - srcSide) / 2;
-  const sy = (glCanvas.height - srcSide) / 2;
   ctx.save();
   ctx.beginPath();
   ctx.roundRect(px, py, photo, photo, 36);
   ctx.clip();
-  ctx.drawImage(glCanvas, sx, sy, srcSide, srcSide, px, py, photo, photo);
+  drawPhoto(ctx, px, py, photo);
   ctx.restore();
   ctx.strokeStyle = 'rgba(255,255,255,0.9)';
   ctx.lineWidth = 6;
@@ -100,6 +105,43 @@ export async function composeShareCard(
   const bytes = new Uint8Array(await raw.arrayBuffer());
   const embedded = embedSeedInPng(bytes, opts.seed);
   return embedded ? new Blob([embedded.buffer as ArrayBuffer], { type: 'image/png' }) : raw;
+}
+
+/** Compose the share card from the live 3D rendering and return
+ *  it as a PNG blob with the seed embedded. */
+export async function composeShareCard(
+  glCanvas: HTMLCanvasElement,
+  opts: ShareCardOptions,
+): Promise<Blob> {
+  return composeCard((ctx, px, py, photo) => {
+    // center-crop the WebGL canvas into the photo square
+    const srcSide = Math.min(glCanvas.width, glCanvas.height);
+    const sx = (glCanvas.width - srcSide) / 2;
+    const sy = (glCanvas.height - srcSide) / 2;
+    ctx.drawImage(glCanvas, sx, sy, srcSide, srcSide, px, py, photo, photo);
+  }, opts);
+}
+
+/** Compose the share card around an image the user generated
+ *  with their own image model (imaging.ts): the card variant for
+ *  the AI illustration of the person. The photo area is filled
+ *  cover-style from the generated image, and the seed embedded
+ *  is the seed of the person the image was generated from — so
+ *  the card restores that person exactly like a rendering card.
+ *  The generated image itself is the user's content (DESIGN.md
+ *  §7); the app contributes only the frame and the seed. */
+export async function composeShareCardFromImage(
+  img: HTMLImageElement,
+  opts: ShareCardOptions,
+): Promise<Blob> {
+  return composeCard((ctx, px, py, photo) => {
+    const iw = img.naturalWidth || img.width;
+    const ih = img.naturalHeight || img.height;
+    const scale = Math.max(photo / iw, photo / ih);
+    const dw = iw * scale;
+    const dh = ih * scale;
+    ctx.drawImage(img, px + (photo - dw) / 2, py + (photo - dh) / 2, dw, dh);
+  }, opts);
 }
 
 /** Trigger a download of the blob. Returns the object URL used. */
