@@ -341,8 +341,9 @@ describe('lineage never enters an artifact', () => {
       const text = readFileSync(join(root, file), 'utf8');
       expect(text.toLowerCase(), `${file} must not know the lineage exists`).not.toContain('lineage');
     }
-    // and the lineage module itself imports only outfit/seed —
-    // it has no path into the artifact builders.
+    // and the lineage module itself imports only outfit/seed
+    // and the (pure, non-artifact) mutation vocabulary — it has
+    // no path into the artifact builders.
     const lineage = readFileSync(join(root, 'src/lineage.ts'), 'utf8');
     expect(lineage).not.toMatch(/from '\.\/(share|export3d|cardseed)'/);
   });

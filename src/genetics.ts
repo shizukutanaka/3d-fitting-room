@@ -48,8 +48,11 @@ import {
 
 /** mulberry32: a tiny integer-only PRNG. Deterministic across
  *  platforms and runs (no floating-point state), which is what
- *  makes a synthesis reproducible from (A, B, mixSeed) alone. */
-function mulberry32(seed: number): () => number {
+ *  makes a synthesis reproducible from (A, B, mixSeed) alone.
+ *  Shared with mutation.ts: every generative process in the app
+ *  (synthesis, variation) draws from this one PRNG, so a seed
+ *  means the same thing everywhere. */
+export function mulberry32(seed: number): () => number {
   let s = seed >>> 0;
   return () => {
     s = (s + 0x6d2b79f5) >>> 0;
@@ -60,18 +63,24 @@ function mulberry32(seed: number): () => number {
   };
 }
 
-/** A default mix seed derived from the two parent seed strings
- *  (FNV-1a over the pair), used when a caller does not specify
- *  one: the same pair of people then always synthesizes the same
- *  person, while different pairs (almost always) differ. */
-export function deriveMixSeed(seedA: string, seedB: string): number {
+/** FNV-1a over a string, as an unsigned 32-bit integer: the
+ *  app's one text hash, used to derive deterministic seeds from
+ *  seed strings (here, and in mutation.ts). */
+export function fnv1a32(text: string): number {
   let h = 0x811c9dc5;
-  const text = `${seedA}\n${seedB}`;
   for (let i = 0; i < text.length; i++) {
     h ^= text.charCodeAt(i);
     h = Math.imul(h, 0x01000193);
   }
   return h >>> 0;
+}
+
+/** A default mix seed derived from the two parent seed strings
+ *  (FNV-1a over the pair), used when a caller does not specify
+ *  one: the same pair of people then always synthesizes the same
+ *  person, while different pairs (almost always) differ. */
+export function deriveMixSeed(seedA: string, seedB: string): number {
+  return fnv1a32(`${seedA}\n${seedB}`);
 }
 
 /** Synthesize a new person from two people's parameters.

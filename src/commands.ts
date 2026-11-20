@@ -39,7 +39,14 @@ import {
   type Outfit,
 } from './outfit';
 import { deriveMixSeed, synthesizeCharacter } from './genetics';
-import { decodeSeed } from './seed';
+import {
+  MUTATION_STRENGTHS,
+  deriveMutationSeed,
+  isMutationStrength,
+  mutateCharacter,
+  type MutationStrength,
+} from './mutation';
+import { decodeSeed, encodeSeed } from './seed';
 
 /** The outfit fields a single option command can set: command
  *  name → outfit field + the catalog its value must come from.
@@ -70,6 +77,7 @@ export type Command =
   | { type: 'randomize_outfit' }
   | { type: 'randomize_character' }
   | { type: 'blend_characters'; seedA: string; seedB: string; mixSeed: number }
+  | { type: 'mutate_character'; strength: MutationStrength; mutationSeed?: number }
   | { type: 'share_card' }
   | { type: 'get_state' };
 
@@ -173,6 +181,36 @@ function validateOne(raw: unknown, out: ValidationResult): void {
       out.commands.push({ type: 'blend_characters', seedA, seedB, mixSeed });
       return;
     }
+    case 'mutate_character': {
+      // One-parent variation of the *current* person (the
+      // two-parent sibling is blend_characters above). The
+      // strength is a closed vocabulary — an invented strength
+      // is a rejection, not a clamp, because strengths are
+      // categories, not quantities. The mutation seed is
+      // optional: without one, execution derives it from the
+      // current person's own seed, so a bare command is still
+      // deterministic (the same person always varies the same
+      // way at a given strength).
+      if (!isMutationStrength(raw.strength)) {
+        reject(`strength must be one of: ${MUTATION_STRENGTHS.join(', ')}`);
+        return;
+      }
+      const cmd: Extract<Command, { type: 'mutate_character' }> = {
+        type: 'mutate_character',
+        strength: raw.strength,
+      };
+      if (raw.mutationSeed !== undefined) {
+        const n =
+          typeof raw.mutationSeed === 'string' ? Number(raw.mutationSeed) : raw.mutationSeed;
+        if (typeof n !== 'number' || !Number.isFinite(n)) {
+          reject('mutationSeed must be an integer');
+          return;
+        }
+        cmd.mutationSeed = Math.floor(n) >>> 0;
+      }
+      out.commands.push(cmd);
+      return;
+    }
     case 'randomize_outfit':
     case 'randomize_character':
     case 'share_card':
@@ -229,6 +267,14 @@ export interface ExecutionResult {
   wantShareCard: boolean;
   /** A get_state command was present. */
   stateRequested: boolean;
+  /** One entry per mutate_character command that ran: the
+   *  seed of the person it varied from, the seed of the person
+   *  it produced, and the strength — the facts of the event,
+   *  reported (not recorded) by the executor. Recording them
+   *  in the on-device lineage is the caller's business, the
+   *  same division of labour as blend_characters, whose
+   *  callers record from the command list itself. */
+  mutations: { source: string; seed: string; strength: MutationStrength }[];
 }
 
 function randomCharacter(rng: () => number): CharacterParams {
@@ -254,6 +300,7 @@ export function executeCommands(
 ): ExecutionResult {
   let outfit: Outfit = { ...current, character: { ...current.character } };
   const applied: string[] = [];
+  const mutations: ExecutionResult['mutations'] = [];
   let wantShareCard = false;
   let stateRequested = false;
   for (const cmd of commands) {
@@ -300,6 +347,25 @@ export function executeCommands(
         }
         break;
       }
+      case 'mutate_character': {
+        // The variation passes sanitizeCharacter inside
+        // mutateCharacter (and sanitizeOutfit again below), so
+        // the adult safety restriction fences a varied person
+        // exactly like any other. Clothes are not traits: the
+        // current outfit stays, the person is replaced by their
+        // neighbour. Where the variation came from is reported
+        // in the result (source and result seeds, captured
+        // here where both are exact) and recording it in the
+        // on-device lineage is the caller's business; the
+        // executor stays a pure function of (commands, current
+        // outfit).
+        const source = encodeSeed(outfit);
+        const mSeed = cmd.mutationSeed ?? deriveMutationSeed(source);
+        outfit = { ...outfit, character: mutateCharacter(outfit.character, mSeed, cmd.strength) };
+        mutations.push({ source, seed: encodeSeed(outfit), strength: cmd.strength });
+        applied.push(`mutate_character strength=${cmd.strength} mutationSeed=${mSeed}`);
+        break;
+      }
       case 'share_card':
         wantShareCard = true;
         applied.push('share_card');
@@ -319,7 +385,7 @@ export function executeCommands(
       }
     }
   }
-  return { outfit: sanitizeOutfit(outfit), applied, wantShareCard, stateRequested };
+  return { outfit: sanitizeOutfit(outfit), applied, wantShareCard, stateRequested, mutations };
 }
 
 /** The protocol description handed to LLMs (as part of the system
@@ -351,6 +417,7 @@ export function describeCommandProtocol(): string {
     '- {"type":"randomize_outfit"} — random clothes, same person',
     '- {"type":"randomize_character"} — a new random person',
     '- {"type":"blend_characters","seedA":"<seed of one person>","seedB":"<seed of another person>","mixSeed":<integer, optional>} — synthesize a new person from the two people named by their seeds; the same seeds and mixSeed always produce the same person. Clothes are not inherited: the current outfit stays on the new person',
+    '- {"type":"mutate_character","strength":<one of: subtle | standard | bold>,"mutationSeed":<integer, optional>} — vary the current person into a nearby new person (one-parent mutation); the same person, strength and mutationSeed always produce the same variation, and without a mutationSeed one is derived from the current person. Clothes stay as they are',
     '- {"type":"share_card"} — save a photo of the current look',
     '- {"type":"get_state"} — report the current state back',
     'Values outside a range are clamped; values not in an option list are rejected. Never invent parameters, options or command types.',
