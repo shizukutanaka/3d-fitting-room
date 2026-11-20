@@ -490,6 +490,10 @@ function buildExport(outfit: Outfit, vrm: boolean): ExportedFile {
             copyrightInformation:
               'A fictional character, generated procedurally on-device by the 3D Fitting Room app. Free to use as material in your own works under CC0 1.0 (see licenseUrl).',
             licenseUrl: EXPORT_LICENSE_URL,
+            // Some tools (e.g. the Blender VRM addon) surface otherLicenseUrl
+            // rather than licenseUrl; mirror the same CC0 deed so the terms
+            // travel in whichever field the reader displays (§23).
+            otherLicenseUrl: EXPORT_LICENSE_URL,
             avatarPermission: 'everyone',
             commercialUsage: 'corporation',
             creditNotation: 'unnecessary',
