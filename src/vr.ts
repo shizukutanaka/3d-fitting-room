@@ -316,6 +316,13 @@ function roundedRect(
   ctx.closePath();
 }
 
+/** Device font stack for panel text: the Japanese families the
+ *  panel started with, plus Simplified-Chinese, Korean and
+ *  Windows fallbacks so all eight languages (M8) draw with the
+ *  headset/browser system fonts — no font assets ship. */
+const FONT_STACK =
+  '"Hiragino Sans", "Noto Sans JP", "Noto Sans SC", "Noto Sans KR", "Malgun Gothic", "Microsoft YaHei", sans-serif';
+
 /** A canvas texture for one button: label text shrunk to fit,
  *  brass when selected, dark walnut otherwise. Drawn with
  *  device fonts only — no font assets ship with the app. */
@@ -338,7 +345,7 @@ function buttonTexture(label: string, selected: boolean, wide: boolean): THREE.C
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   let size = 52;
-  const font = (s: number) => `600 ${s}px "Hiragino Sans", "Noto Sans JP", sans-serif`;
+  const font = (s: number) => `600 ${s}px ${FONT_STACK}`;
   ctx.font = font(size);
   while (size > 22 && ctx.measureText(label).width > cw - 44) {
     size -= 4;
@@ -363,7 +370,7 @@ function labelTexture(text: string): THREE.CanvasTexture {
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   let size = 38;
-  const font = (s: number) => `600 ${s}px "Hiragino Sans", "Noto Sans JP", sans-serif`;
+  const font = (s: number) => `600 ${s}px ${FONT_STACK}`;
   ctx.font = font(size);
   while (size > 20 && ctx.measureText(text).width > cw - 16) {
     size -= 3;
@@ -376,12 +383,83 @@ function labelTexture(text: string): THREE.CanvasTexture {
   return tex;
 }
 
+/** Wrap a paragraph into lines that fit `maxWidth`: word by word
+ *  for spaced scripts, character by character for CJK (which has
+ *  no spaces). A single over-long word is hard-split. */
+function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
+  const tokens: string[] = [];
+  let word = '';
+  for (const ch of text) {
+    if (ch === ' ') {
+      if (word) tokens.push(word);
+      word = '';
+      tokens.push(' ');
+    } else if (/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/.test(ch)) {
+      if (word) tokens.push(word);
+      word = '';
+      tokens.push(ch);
+    } else {
+      word += ch;
+    }
+  }
+  if (word) tokens.push(word);
+  const lines: string[] = [];
+  let line = '';
+  for (const token of tokens) {
+    if (token === ' ' && line === '') continue;
+    const next = line + token;
+    if (ctx.measureText(next).width <= maxWidth || line === '') {
+      line = next;
+    } else {
+      lines.push(line.trimEnd());
+      line = token === ' ' ? '' : token;
+    }
+  }
+  if (line.trim() !== '') lines.push(line.trimEnd());
+  return lines;
+}
+
+/** A canvas texture for a wrapped paragraph (the principle note):
+ *  smaller, dimmer type than the labels, as many lines as the
+ *  text needs. Returns the texture and its aspect (height/width)
+ *  so the caller can size the plane. */
+function noteTexture(text: string): { tex: THREE.CanvasTexture; aspect: number } {
+  const cw = 1024;
+  const pad = 16;
+  const fontSize = 30;
+  const lineHeight = 44;
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('2d context unavailable');
+  ctx.font = `500 ${fontSize}px ${FONT_STACK}`;
+  const lines = wrapText(ctx, text, cw - pad * 2);
+  const ch = lines.length * lineHeight + pad;
+  canvas.width = cw;
+  canvas.height = ch;
+  // Resizing the canvas resets the context state; set it again.
+  ctx.font = `500 ${fontSize}px ${FONT_STACK}`;
+  ctx.fillStyle = '#cfc2a8';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  lines.forEach((line, i) => {
+    ctx.fillText(line, pad, pad / 2 + i * lineHeight);
+  });
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return { tex, aspect: ch / cw };
+}
+
 export class VrPanel {
   readonly group = new THREE.Group();
   private content = new THREE.Group();
   private hitMeshes: THREE.Object3D[] = [];
   private hovered: THREE.Object3D | null = null;
   private readonly categories = buildVrCategories();
+  /** The adult/fictional principle note (M9) as currently rendered
+   *  on the board, or null while the board shows the page without
+   *  it. Read by the verification bridge. */
+  noteText: string | null = null;
 
   constructor() {
     this.group.position.copy(VR_PANEL_POSITION);
@@ -444,6 +522,18 @@ export class VrPanel {
     this.content.add(mesh);
   }
 
+  /** A wrapped paragraph pinned with its top edge at `topY`;
+   *  returns the height it consumed. Not a press target. */
+  private addNote(text: string, topY: number, w: number): number {
+    const { tex, aspect } = noteTexture(text);
+    const h = w * aspect;
+    const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+    mesh.position.set(0, topY - h / 2, 0.01);
+    this.content.add(mesh);
+    return h;
+  }
+
   private addSwatch(hex: string, selected: boolean, actionId: string, x: number, y: number, w: number): void {
     if (selected) {
       const frame = new THREE.Mesh(
@@ -481,6 +571,7 @@ export class VrPanel {
     }
     this.hitMeshes = [];
     this.hovered = null;
+    this.noteText = null;
 
     const { outfit, page } = state;
     let cursorY = VR_PANEL_HEIGHT / 2 - 0.075; // top inner edge (row centers walk down)
@@ -587,6 +678,15 @@ export class VrPanel {
       );
       cursorY -= CHIP_HEIGHT / 2 + ROW_GAP + 0.03;
       this.addLabel(t('vr.hint'), -PANEL_INNER_WIDTH / 2 + 0.47, cursorY, 0.94);
+      // M9: the adult/fictional principle, readable inside VR —
+      // this page is one press from the clothes page, so the note
+      // is never more than two actions away (enter VR, open this
+      // page). It is text, not a button: nothing to press, just
+      // there to be read.
+      const note = t('principle.note');
+      cursorY -= LABEL_HEIGHT / 2 + 0.035;
+      this.addNote(note, cursorY, PANEL_INNER_WIDTH);
+      this.noteText = note;
     }
   }
 

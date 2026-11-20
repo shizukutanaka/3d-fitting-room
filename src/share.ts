@@ -9,7 +9,7 @@
 // for platforms that re-encode uploads and strip chunks. The card
 // states plainly that the person is fictional (LEGAL-ETHICS J-07).
 
-import { getLang } from './i18n';
+import { getLang, t } from './i18n';
 import { embedSeedInPng } from './cardseed';
 
 const CARD_SIZE = 1080;
@@ -105,7 +105,7 @@ async function composeCard(drawPhoto: PhotoDrawer, opts: ShareCardOptions): Prom
   ctx.font = '400 24px "Hiragino Sans", sans-serif';
   ctx.fillStyle = '#8a7a63';
   const sub =
-    getLang() === 'ja'
+    getLang() === 'ja' || getLang() === 'zh'
       ? `${opts.tagline}（${opts.workingTitleNote}）`
       : `${opts.tagline} (${opts.workingTitleNote})`;
   ctx.fillText(sub, CARD_SIZE / 2, y);
@@ -164,8 +164,7 @@ async function composeCard(drawPhoto: PhotoDrawer, opts: ShareCardOptions): Prom
     y += 2;
     ctx.font = '400 22px "Hiragino Sans", sans-serif';
     ctx.fillStyle = '#8a7a63';
-    const byline =
-      getLang() === 'ja' ? `着用: ${personName}` : `Worn by: ${personName}`;
+    const byline = `${t('card.wornBy')}: ${personName}`;
     ctx.fillText(byline, CARD_SIZE / 2, y);
     y += 25;
   }
@@ -180,11 +179,7 @@ async function composeCard(drawPhoto: PhotoDrawer, opts: ShareCardOptions): Prom
   // J-07: the person on the card is fictional — say so on the card
   ctx.font = '400 20px "Hiragino Sans", sans-serif';
   ctx.fillStyle = '#8a7a63';
-  ctx.fillText(
-    getLang() === 'ja' ? '※この人物は架空のキャラクターです' : '* This character is fictional.',
-    CARD_SIZE / 2,
-    y,
-  );
+  ctx.fillText(t('card.fictional'), CARD_SIZE / 2, y);
 
   const raw = await new Promise<Blob>((resolve, reject) => {
     card.toBlob(
