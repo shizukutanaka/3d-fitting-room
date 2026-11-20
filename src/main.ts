@@ -26,12 +26,30 @@ import {
   SHOE_STYLES,
   TOP_COLORS,
   TOP_STYLES,
+  DEFAULT_OUTFIT,
   loadOutfit,
   randomOutfit,
+  sanitizeName,
   sanitizeOutfit,
   saveOutfit,
   type Outfit,
 } from './outfit';
+import {
+  addEntry,
+  currentEntry,
+  loadRoster,
+  removeEntry,
+  renameEntry,
+  saveRoster,
+  upsertCurrent,
+  type Roster,
+} from './roster';
+import {
+  loadLineage,
+  recordLineage,
+  type LineageEvent,
+  type LineageKind,
+} from './lineage';
 import { extractSeedFromPng } from './cardseed';
 import { exportGlb, exportVrm, type ExportedFile } from './export3d';
 import {
@@ -57,7 +75,12 @@ import {
   testConnection,
   type LlmSettings,
 } from './llm';
-import { describeCommandProtocol, executeCommands, validateCommands } from './commands';
+import {
+  describeCommandProtocol,
+  executeCommands,
+  validateCommands,
+  type Command,
+} from './commands';
 import {
   buildImagePrompt,
   generateImg2Img,
@@ -76,7 +99,13 @@ setLang(detectLang(localStorage.getItem(LANG_KEY)));
 document.documentElement.lang = getLang();
 
 const stage = createStage(canvas);
-let outfit: Outfit = loadOutfit();
+// The roster is the save system (roster.ts): the person on
+// stage is the roster's current entry, and every change is
+// autosaved back into that entry. The first load migrates the
+// pre-roster single save, so the person a returning user had is
+// the person they get — byte for byte.
+let roster: Roster = loadRoster();
+let outfit: Outfit = decodeSeed(currentEntry(roster).seed) ?? loadOutfit();
 const rig = buildAvatar(outfit.character);
 stage.scene.add(rig.root);
 stage.setSubjectHeight(outfit.character.height);
@@ -116,6 +145,44 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
+/** Persist the current person: the legacy single-save key
+ *  (outfit.ts — its autosave behavior is unchanged) and the
+ *  roster's current entry, which is the same person as a seed. */
+function persist(): void {
+  saveOutfit(outfit);
+  roster = upsertCurrent(roster, encodeSeed(outfit));
+  saveRoster(roster);
+}
+
+// ---- lineage: the on-device edit history (lineage.ts) ----
+// Recorded at the identity-level event points only — a person
+// is created, restored from a seed/card/history entry, blended
+// (with the two parent seeds, which live only here), or
+// renamed. Slider drags and outfit changes are not events: the
+// history is a list of people and how they came to be, not a
+// log of every gesture. Nothing recorded here is ever copied
+// into a seed, a card, or an exported file.
+let lineageEvents: LineageEvent[] = loadLineage();
+
+function recordEvent(kind: LineageKind, seed: string, parents?: [string, string]): void {
+  const event: LineageEvent = { at: Date.now(), kind, seed };
+  if (parents) event.parents = parents;
+  const name = decodeSeed(seed)?.name ?? '';
+  if (name) event.name = name;
+  lineageEvents = recordLineage(event);
+}
+
+/** Record any blends a validated command list performed, with
+ *  the resulting person's seed (the lineage keeps the parents;
+ *  the person and their seed keep nothing). */
+function recordCommandBlends(commands: Command[], result: Outfit): void {
+  for (const cmd of commands) {
+    if (cmd.type === 'blend_characters') {
+      recordEvent('blend', encodeSeed(result), [cmd.seedA, cmd.seedB]);
+    }
+  }
+}
+
 function update(next: Outfit): void {
   // Every state that lands in the app passes the sanitize gate —
   // including the ones arriving through the verification/agent
@@ -129,7 +196,7 @@ function update(next: Outfit): void {
   rig.setCharacter(outfit.character);
   stage.setSubjectHeight(outfit.character.height);
   applyOutfit(rig, outfit);
-  saveOutfit(outfit);
+  persist();
   renderOptions();
 }
 
@@ -154,7 +221,7 @@ function patchCharacter(patch: Partial<CharacterParams>): void {
   };
   rig.setCharacter(outfit.character);
   stage.setSubjectHeight(outfit.character.height);
-  saveOutfit(outfit);
+  persist();
   const seedEl = document.getElementById('seed-value');
   if (seedEl) seedEl.textContent = encodeSeed(outfit);
 }
@@ -195,9 +262,13 @@ let sdResult: { dataUrl: string; seed: string } | null = null;
 // this app has. The synthesized person is previewed on the rig
 // without touching the saved state; only "use this person"
 // commits it, through update() and its sanitize gate like every
-// other path. Parentage is recorded nowhere: once applied, the
-// person is an ordinary character with an ordinary seed. The
-// form state is module state so it survives panel re-renders.
+// other path. Once applied, the person is an ordinary
+// character with an ordinary seed — no parentage rides on the
+// person, the seed, the card, or exported files. The blend
+// itself is recorded, parents included, in the on-device edit
+// history only (lineage.ts; J-06's edit-history allowance —
+// see DESIGN.md §19.2). The form state is module state so it
+// survives panel re-renders.
 let blendSeedA = '';
 let blendSeedB = '';
 let blendChild: CharacterParams | null = null;
@@ -227,6 +298,84 @@ function onBlendGenerate(): void {
   showToast(t('genetics.created'));
   renderOptions();
 }
+
+// ---- identity: name, roster, history (the character tab) ----
+// The name field commits on change (blur/Enter), not per
+// keystroke: a rename is an identity event, recorded once.
+function commitName(raw: string): void {
+  const name = sanitizeName(raw);
+  if (name === outfit.name) {
+    renderOptions();
+    return;
+  }
+  const next = { ...outfit, name };
+  recordEvent('rename', encodeSeed(next));
+  update(next);
+}
+
+/** Start a new, blank person as a new roster entry. The person
+ *  who was on stage stays in the roster, one tap away. */
+function onNewPerson(): void {
+  const seed = encodeSeed({ ...DEFAULT_OUTFIT });
+  roster = addEntry(roster, seed);
+  saveRoster(roster);
+  recordEvent('create', seed);
+  update(decodeSeed(seed) ?? { ...DEFAULT_OUTFIT });
+}
+
+/** Call a roster person back onto the stage. Switching people
+ *  is navigation, not an edit — nothing is recorded. */
+function onLoadPerson(id: string): void {
+  const entry = roster.entries.find((e) => e.id === id);
+  if (!entry || id === roster.currentId) return;
+  const decoded = decodeSeed(entry.seed);
+  if (!decoded) return;
+  roster = { ...roster, currentId: id };
+  saveRoster(roster);
+  renamingId = null;
+  update(decoded);
+}
+
+function onDeletePerson(id: string): void {
+  const wasCurrent = id === roster.currentId;
+  roster = removeEntry(roster, id);
+  saveRoster(roster);
+  if (renamingId === id) renamingId = null;
+  if (wasCurrent) {
+    const decoded = decodeSeed(currentEntry(roster).seed);
+    if (decoded) update(decoded);
+    else renderOptions();
+  } else {
+    renderOptions();
+  }
+}
+
+/** Rename any roster entry (not just the person on stage): the
+ *  name lives in the entry's seed, so this re-issues that seed
+ *  with the new name. Renaming the current person also flows
+ *  through update(), keeping stage, save and roster in step. */
+function commitEntryRename(id: string, raw: string): void {
+  const next = renameEntry(roster, id, sanitizeName(raw));
+  renamingId = null;
+  if (!next) {
+    renderOptions();
+    return;
+  }
+  roster = next;
+  saveRoster(roster);
+  const entry = roster.entries.find((e) => e.id === id);
+  if (entry) recordEvent('rename', entry.seed);
+  if (id === roster.currentId && entry) {
+    const decoded = decodeSeed(entry.seed);
+    if (decoded) update(decoded);
+    else renderOptions();
+  } else {
+    renderOptions();
+  }
+}
+
+/** Which roster row is currently showing its rename input. */
+let renamingId: string | null = null;
 
 function readSettingsForm(): LlmSettings {
   const get = (id: string) =>
@@ -292,6 +441,7 @@ async function onSendChat(): Promise<void> {
     const { validation } = outcome;
     if (validation.commands.length) {
       const exec = executeCommands(validation.commands, outfit);
+      recordCommandBlends(validation.commands, exec.outfit);
       if (validation.commands.some((c) => c.type !== 'get_state')) update(exec.outfit);
       if (exec.applied.length) {
         chatLog.push({ who: 'sys', text: `${t('llm.applied')}: ${exec.applied.join('; ')}` });
@@ -484,6 +634,25 @@ function renderOptions(): void {
 
   if (activeTab === 'character') {
     const c = outfit.character;
+    // name: the identity anchor, first in the tab because it is
+    // what makes this a *person* rather than a parameter set
+    // (PERSPECTIVES-2.md R2-1/R2-2). Optional, device-local,
+    // travels inside the seed and headlines the share card.
+    // J-07: naming a person after a real person is prohibited
+    // by the terms — upheld by the note below, not by matching.
+    nodes.push(el('span', 'group-label', t('ui.name')));
+    const nameRow = el('div', 'seed-row');
+    const nameInput = el('input', 'seed-input');
+    nameInput.id = 'person-name';
+    nameInput.type = 'text';
+    nameInput.value = outfit.name;
+    nameInput.placeholder = t('ui.namePlaceholder');
+    nameInput.setAttribute('aria-label', t('ui.name'));
+    nameInput.addEventListener('change', () => commitName(nameInput.value));
+    nameRow.append(nameInput);
+    nodes.push(nameRow);
+    nodes.push(el('p', 'llm-note', t('ui.nameNote')));
+
     // skin tone: continuous Fitzpatrick slider (label shows the
     // nearest roman numeral so the scale stays legible)
     const skinRow = el('div', 'slider-row');
@@ -676,8 +845,12 @@ function renderOptions(): void {
     seedInput.setAttribute('aria-label', t('ui.seed'));
     const applyBtn = chip(t('ui.seedApply'), false, () => {
       const decoded = decodeSeed(seedInput.value);
-      if (decoded) update(decoded);
-      else showToast(t('ui.seedInvalid'));
+      if (decoded) {
+        // A received seed taking the stage is a restoration —
+        // the variation's arrival is an identity event.
+        recordEvent('restore', encodeSeed(decoded));
+        update(decoded);
+      } else showToast(t('ui.seedInvalid'));
     });
     applyRow.append(seedInput, applyBtn);
     nodes.push(applyRow);
@@ -686,6 +859,55 @@ function renderOptions(): void {
     const cardRow = el('div', 'seed-row');
     cardRow.append(chip(t('ui.cardLoad'), false, () => cardFileInput.click()));
     nodes.push(cardRow);
+    // roster: every person kept on this device (roster.ts).
+    // One tap calls a person back — the reappearance the
+    // recognition loop runs on (PERSPECTIVES-2.md R2-1) is
+    // only as real as this list makes it. Most recently
+    // updated first; the person on stage is marked.
+    nodes.push(el('span', 'group-label', t('ui.roster')));
+    const byRecent = [...roster.entries].sort((a, b) => b.updatedAt - a.updatedAt);
+    for (const entry of byRecent) {
+      const row = el('div', 'seed-row');
+      const person = decodeSeed(entry.seed);
+      const label = person?.name || t('ui.unnamed');
+      if (renamingId === entry.id) {
+        const input = el('input', 'seed-input');
+        input.type = 'text';
+        input.value = person?.name ?? '';
+        input.placeholder = t('ui.namePlaceholder');
+        input.setAttribute('aria-label', t('ui.name'));
+        input.addEventListener('change', () => commitEntryRename(entry.id, input.value));
+        row.append(input);
+      } else {
+        const isCurrent = entry.id === roster.currentId;
+        const loadBtn = chip(
+          isCurrent
+            ? getLang() === 'ja'
+              ? `${label}（${t('ui.currentPerson')}）`
+              : `${label} (${t('ui.currentPerson')})`
+            : label,
+          isCurrent,
+          () => onLoadPerson(entry.id),
+        );
+        loadBtn.classList.add('roster-load');
+        row.append(loadBtn);
+        const renameBtn = chip(t('ui.rename'), false, () => {
+          renamingId = entry.id;
+          renderOptions();
+        });
+        renameBtn.classList.add('roster-rename');
+        const deleteBtn = chip(t('ui.delete'), false, () => onDeletePerson(entry.id));
+        deleteBtn.classList.add('roster-delete');
+        row.append(renameBtn, deleteBtn);
+      }
+      nodes.push(row);
+    }
+    const newRow = el('div', 'seed-row');
+    const newBtn = chip(t('ui.newPerson'), false, onNewPerson);
+    newBtn.id = 'roster-new';
+    newRow.append(newBtn);
+    nodes.push(newRow);
+
     // The 3D-file export lives here, with the other "person as a
     // file" machinery: a T-posed, boned, self-describing file
     // (glTF or VRM) whose honest positioning is stated in the
@@ -703,7 +925,9 @@ function renderOptions(): void {
     // genetics: synthesize a new person from two people's seeds
     // (see the module-state block above). The result is presented
     // as what it is — a new adult person — and previewed before
-    // it can be applied; nothing about the two inputs is kept.
+    // it can be applied. Applying records the blend (parents
+    // included) in the on-device history only; the new person
+    // starts unnamed, like every new person.
     nodes.push(el('span', 'group-label', t('genetics.title')));
     nodes.push(el('p', 'llm-note', t('genetics.note')));
     const blendRow = (
@@ -750,7 +974,7 @@ function renderOptions(): void {
       const childSeedVal = el(
         'code',
         'seed-value',
-        encodeSeed({ ...outfit, character: blendChild }),
+        encodeSeed({ ...outfit, character: blendChild, name: '' }),
       );
       childSeedVal.id = 'blend-child-seed';
       childSeedRow.append(childSeedVal);
@@ -759,8 +983,15 @@ function renderOptions(): void {
       const applyBtn = chip(t('genetics.apply'), false, () => {
         if (!blendChild) return;
         const child = blendChild;
+        const parents: [string, string] = [blendSeedA.trim(), blendSeedB.trim()];
         blendChild = null;
-        update({ ...outfit, character: child });
+        // The synthesized person is new: unnamed, and the blend
+        // is recorded — parents included — in the on-device
+        // history only (lineage.ts). The person's own seed is
+        // an ordinary seed with no parentage in it.
+        const next = { ...outfit, character: child, name: '' };
+        recordEvent('blend', encodeSeed(next), parents);
+        update(next);
       });
       applyBtn.id = 'blend-apply';
       const cancelBtn = chip(t('genetics.cancel'), false, () => {
@@ -771,6 +1002,47 @@ function renderOptions(): void {
       cancelBtn.id = 'blend-cancel';
       actRow.append(applyBtn, cancelBtn);
       nodes.push(actRow);
+    }
+
+    // edit history: the lineage, newest first (lineage.ts).
+    // Every row is a person as they stood at that event —
+    // tapping one restores them, which is what "traceable"
+    // means here. Blend rows name their two parents (decoded
+    // from the parent seeds kept only in this history). The
+    // history itself never leaves the device and is never
+    // written into a card, a seed, or an exported file.
+    nodes.push(el('span', 'group-label', t('ui.history')));
+    nodes.push(el('p', 'llm-note', t('ui.historyNote')));
+    const recent = [...lineageEvents].reverse().slice(0, 20);
+    for (const ev of recent) {
+      const row = el('div', 'seed-row');
+      const person = decodeSeed(ev.seed);
+      const label = ev.name || person?.name || t('ui.unnamed');
+      const when = new Date(ev.at).toLocaleString(getLang() === 'ja' ? 'ja-JP' : 'en-US', {
+        month: 'numeric',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      const btn = chip(
+        `${when} · ${t(`history.${ev.kind}` as I18nKey)} · ${label}`,
+        false,
+        () => {
+          const decoded = decodeSeed(ev.seed);
+          if (!decoded) return;
+          recordEvent('restore', encodeSeed(decoded));
+          update(decoded);
+          showToast(t('ui.historyRestored'));
+        },
+      );
+      btn.classList.add('history-load');
+      row.append(btn);
+      nodes.push(row);
+      if (ev.kind === 'blend' && ev.parents) {
+        const a = decodeSeed(ev.parents[0])?.name || t('ui.unnamed');
+        const b = decodeSeed(ev.parents[1])?.name || t('ui.unnamed');
+        nodes.push(el('p', 'llm-note', `${t('history.parents')}: ${a} × ${b}`));
+      }
     }
   } else if (activeTab === 'tops') {
     for (const style of TOP_STYLES) {
@@ -1030,6 +1302,7 @@ async function applyCardBytes(bytes: Uint8Array): Promise<boolean> {
   if (!seed) return false;
   const decoded = decodeSeed(seed);
   if (!decoded) return false;
+  recordEvent('restore', encodeSeed(decoded));
   update(decoded);
   return true;
 }
@@ -1070,6 +1343,7 @@ async function exportPhoto(): Promise<void> {
     workingTitleNote: t('app.workingTitle'),
     tagline: t('app.tagline'),
     seed: encodeSeed(outfit),
+    name: outfit.name,
   });
   downloadBlob(blob, '3d-fitting-room.png');
   showToast(t('ui.saved'));
@@ -1097,8 +1371,8 @@ function downloadExport(format: 'glb' | 'vrm'): void {
   showToast(t('ui.exported'));
 }
 document.getElementById('btn-random')!.addEventListener('click', () => {
-  // Randomize the outfit, not the person.
-  update({ ...randomOutfit(), character: outfit.character });
+  // Randomize the outfit, not the person — name included.
+  update({ ...randomOutfit(), character: outfit.character, name: outfit.name });
 });
 const spinBtn = document.getElementById('btn-spin')!;
 spinBtn.addEventListener('click', () => {
@@ -1123,6 +1397,14 @@ document.getElementById('lang-toggle')!.addEventListener('click', () => {
 });
 
 window.addEventListener('resize', () => stage.resize());
+
+// A fresh device (or one whose history starts with this
+// version) opens its edit history with the person on stage:
+// their creation is the first event every later event hangs
+// from.
+if (lineageEvents.length === 0) {
+  recordEvent('create', encodeSeed(outfit));
+}
 
 applyStaticTexts();
 renderTabs();
@@ -1154,6 +1436,12 @@ interface FittingRoomBridge {
   setOutfit(partial: Partial<Outfit>): void;
   getSeed(): string;
   setSeed(seed: string): boolean;
+  /** The roster of people kept on this device (a read-only
+   *  snapshot for verification: who is kept, and which entry is
+   *  on stage). */
+  getRoster(): Roster;
+  /** The on-device edit history (a read-only snapshot). */
+  getLineage(): LineageEvent[];
   cardDataURL(): Promise<string>;
   /** Export the current person + outfit as a 3D file ('glb' or
    *  'vrm'): the bytes as a base64 data URL, plus the part count
@@ -1204,9 +1492,15 @@ const bridge: FittingRoomBridge = {
   setSeed: (seed) => {
     const decoded = decodeSeed(seed);
     if (!decoded) return false;
+    recordEvent('restore', encodeSeed(decoded));
     update(decoded);
     return true;
   },
+  getRoster: () => ({
+    entries: roster.entries.map((e) => ({ ...e })),
+    currentId: roster.currentId,
+  }),
+  getLineage: () => lineageEvents.map((e) => ({ ...e })),
   runCommands: (raw) => {
     const list = Array.isArray(raw)
       ? raw
@@ -1215,6 +1509,7 @@ const bridge: FittingRoomBridge = {
         : raw;
     const validation = validateCommands(list);
     const exec = executeCommands(validation.commands, outfit);
+    recordCommandBlends(validation.commands, exec.outfit);
     if (validation.commands.some((c) => c.type !== 'get_state')) update(exec.outfit);
     return {
       applied: exec.applied,
@@ -1261,6 +1556,7 @@ const bridge: FittingRoomBridge = {
       workingTitleNote: t('app.workingTitle'),
       tagline: t('app.tagline'),
       seed: encodeSeed(outfit),
+      name: outfit.name,
     });
     return new Promise<string>((resolve, reject) => {
       const reader = new FileReader();

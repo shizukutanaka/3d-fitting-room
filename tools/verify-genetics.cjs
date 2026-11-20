@@ -190,7 +190,7 @@ async function main() {
   results.checks.childCharacter = childOutfit.character;
   const childSeed = await win.webContents.executeJavaScript(`window.__fittingRoom.getSeed()`);
   results.checks.childSeed = childSeed;
-  results.checks.childSeedIsV4 = String(childSeed).startsWith('FR4-');
+  results.checks.childSeedIsV5 = String(childSeed).startsWith('FR5-');
   // Inheritance spot checks against the decoded parents.
   const cA = PARENT_A.character;
   const cB = PARENT_B.character;

@@ -171,8 +171,9 @@ describe('skin tone mapping', () => {
   });
 });
 
-describe('seed encoding (phase 0, format v4 since body parameters)', () => {
+describe('seed encoding (phase 0, format v5 since the identity foundation)', () => {
   const custom: Outfit = {
+    name: '',
     topStyle: 'dress',
     topColor: '#3a4152',
     bottomStyle: 'skirt',
@@ -380,11 +381,12 @@ describe('seed encoding (phase 0, format v4 since body parameters)', () => {
 
   it('produces a short, recognizable string', () => {
     const seed = encodeSeed(DEFAULT_OUTFIT);
-    expect(seed.startsWith('FR4-')).toBe(true);
-    // 34 payload bytes -> 46 base64url chars + the 4-char prefix.
-    // The bound grows with each format version's payload; what
-    // matters is that a seed stays short enough to print on a
-    // share card and type by hand.
+    expect(seed.startsWith('FR5-')).toBe(true);
+    // 35 payload bytes (the v4 layout + an empty name block) ->
+    // 47 base64url chars + the 4-char prefix. The bound grows
+    // with each format version's payload; what matters is that
+    // a seed stays short enough to print on a share card and
+    // type by hand.
     expect(seed.length).toBeLessThanOrEqual(52);
   });
 

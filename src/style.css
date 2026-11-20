@@ -162,6 +162,18 @@ body {
   background: var(--accent-soft);
 }
 
+/* Roster and history rows: the person's name button takes the
+   row's width and reads left-aligned, like a list entry. */
+.roster-load,
+.history-load {
+  flex: 1;
+  text-align: left;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .swatch {
   width: 34px;
   height: 34px;
