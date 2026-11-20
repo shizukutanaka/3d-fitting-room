@@ -1,0 +1,234 @@
+:root {
+  --ink: #43303e;
+  --ink-soft: #9a6b84;
+  --accent: #ff5d8f;
+  --accent-soft: #ffe3ee;
+  --panel: rgba(255, 255, 255, 0.88);
+  --chip: #ffffff;
+  --radius: 16px;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: "Hiragino Maru Gothic ProN", "Hiragino Sans", "Noto Sans JP",
+    system-ui, sans-serif;
+  color: var(--ink);
+  overflow: hidden;
+  background: #fdeef4;
+}
+
+#gl {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}
+
+#hud-top {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 14px 16px;
+  pointer-events: none;
+}
+
+#hud-top > * {
+  pointer-events: auto;
+}
+
+.brand h1 {
+  margin: 0;
+  font-size: 26px;
+  letter-spacing: 0.04em;
+  text-shadow: 0 2px 0 rgba(255, 255, 255, 0.8);
+}
+
+.brand .badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--ink-soft);
+  background: rgba(255, 255, 255, 0.75);
+  border-radius: 999px;
+  vertical-align: super;
+}
+
+.brand p {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+
+#lang-toggle {
+  border: 2px solid var(--accent-soft);
+  background: var(--panel);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+#toast {
+  position: fixed;
+  top: 84px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--ink);
+  color: #fff;
+  padding: 9px 18px;
+  border-radius: 999px;
+  font-size: 14px;
+  z-index: 20;
+  box-shadow: 0 6px 20px rgba(67, 48, 62, 0.3);
+}
+
+#panel {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 10px;
+  width: min(680px, calc(100vw - 16px));
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  border-radius: 22px;
+  padding: 12px 14px 10px;
+  box-shadow: 0 10px 34px rgba(190, 90, 130, 0.22);
+}
+
+#tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  scrollbar-width: none;
+}
+
+#tabs::-webkit-scrollbar {
+  display: none;
+}
+
+#tabs button {
+  flex: 1 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 13.5px;
+  font-weight: 700;
+  padding: 7px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#tabs button[aria-pressed="true"] {
+  background: var(--accent);
+  color: #fff;
+}
+
+#options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 42px;
+  align-items: center;
+}
+
+.chip {
+  border: 2px solid var(--accent-soft);
+  background: var(--chip);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.chip[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.swatch {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 3px solid #fff;
+  box-shadow: 0 0 0 2px var(--accent-soft);
+  cursor: pointer;
+  padding: 0;
+}
+
+.swatch[aria-pressed="true"] {
+  box-shadow: 0 0 0 3px var(--accent);
+}
+
+.group-label {
+  font-size: 12px;
+  color: var(--ink-soft);
+  font-weight: 700;
+  margin-right: 2px;
+}
+
+#actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+#actions button {
+  border: 2px solid var(--accent-soft);
+  background: var(--chip);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 9px 16px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+#actions button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  flex: 1 0 auto;
+}
+
+#actions button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+#footer-note {
+  margin: 8px 2px 0;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  text-align: center;
+}
+
+@media (min-width: 900px) {
+  #panel {
+    left: auto;
+    right: 18px;
+    transform: none;
+    bottom: 18px;
+    width: 400px;
+  }
+  .brand h1 {
+    font-size: 32px;
+  }
+}
