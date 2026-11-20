@@ -28,11 +28,17 @@
 //
 // Clothing is not part of the synthesis: an Outfit's clothes are
 // choices, not traits, and the caller keeps its current outfit
-// (see DESIGN.md §16 for the reasoning). Parentage is likewise
-// not recorded anywhere: the synthesized person is an ordinary
-// CharacterParams, seedable and shareable like any other, with
-// no lineage data attached (J-06: no family-tree display; the
-// only history is the edit history of the state itself).
+// (see DESIGN.md §16 for the reasoning). Neither is the name:
+// the result is a new person and starts unnamed. Parentage is
+// never attached to the person — the synthesized person is an
+// ordinary CharacterParams, seedable and shareable like any
+// other, and the seed, the share card and exported files carry
+// no lineage data. The one place a blend's parentage exists is
+// the on-device edit history (lineage.ts), recorded by the
+// caller when a blend is applied: J-06 limits family-tree-like
+// presentation to exactly that — the edit-history display of
+// fictional people. (The earlier "recorded nowhere" rule was
+// an over-reading of J-06; see DESIGN.md §18.2.)
 
 import {
   CHARACTER_PARAM_SPECS,

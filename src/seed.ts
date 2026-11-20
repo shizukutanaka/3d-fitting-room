@@ -21,7 +21,17 @@
 // - v4 ("FR4-", 34 bytes): appends the 5 body parameters after
 //   the v3 layout, byte for byte. Still decodable in reverse:
 //   v1–v3 seeds load the body with defaults.
-// Encoding always produces v4.
+// - v5 ("FR5-", 35+ bytes): the v4 layout followed by the
+//   person's display name — one length byte (the name's UTF-8
+//   byte count, at most NAME_MAX_UTF8_BYTES) and the name's
+//   UTF-8 bytes. The name is the one variable-length field in
+//   the format; everything before it is byte-for-byte v4, so
+//   the parameter payload is unchanged. v1–v4 seeds carry no
+//   name and load unnamed (a regular state — naming is
+//   optional). The name is a display label set by the user on
+//   their own device (LEGAL-ETHICS.md judgment J-07); it is
+//   not a character parameter and never enters the specs.
+// Encoding always produces v5.
 
 import {
   ACCESSORIES,
@@ -29,11 +39,13 @@ import {
   BOTTOM_STYLES,
   GLASSES,
   HATS,
+  NAME_MAX_UTF8_BYTES,
   POSES,
   SHOE_COLORS,
   SHOE_STYLES,
   TOP_COLORS,
   TOP_STYLES,
+  sanitizeName,
   sanitizeOutfit,
   type Outfit,
 } from './outfit';
@@ -52,6 +64,7 @@ const PREFIX_V1 = 'FR1-';
 const PREFIX_V2 = 'FR2-';
 const PREFIX_V3 = 'FR3-';
 const PREFIX_V4 = 'FR4-';
+const PREFIX_V5 = 'FR5-';
 const BYTE_COUNT_V1 = 12;
 const BYTE_COUNT_V2 = 25;
 const BYTE_COUNT_V3 = 29;
@@ -102,8 +115,12 @@ function dequantizeRange(key: QuantKey, byte: number): number {
 
 export function encodeSeed(outfit: Outfit): string {
   const c = outfit.character;
+  // sanitizeName enforces the character and UTF-8 byte budgets,
+  // so the length byte below always fits and the decoder's
+  // structural checks always pass for encoder output.
+  const nameBytes = [...new TextEncoder().encode(sanitizeName(outfit.name))];
   const bytes = [
-    4,
+    5,
     Math.round(clamp(c.skinTone, 0, 1) * 255),
     Math.round((clamp(c.height, HEIGHT_MIN, HEIGHT_MAX) - HEIGHT_MIN) * 100),
     idx(HAIR_COLORS, c.hairColor),
@@ -121,8 +138,11 @@ export function encodeSeed(outfit: Outfit): string {
     idx(SHOE_STYLES, outfit.shoeStyle),
     idx(SHOE_COLORS, outfit.shoeColor),
     ...BODY_PARAM_KEYS.map((key) => quantizeRange(key, c[key])),
+    // v5 name block: length byte + UTF-8 bytes (possibly empty).
+    nameBytes.length,
+    ...nameBytes,
   ];
-  return PREFIX_V4 + bytesToBase64Url(bytes);
+  return PREFIX_V5 + bytesToBase64Url(bytes);
 }
 
 /** Decode a seed back into a full state. Returns null for anything
@@ -135,20 +155,49 @@ export function encodeSeed(outfit: Outfit): string {
  *  seed yields the default face (its layout predates face
  *  parameters); v1 and v2 seeds yield the default bottoms and
  *  shoes; v1–v3 seeds yield the default body (their layouts
- *  predate the body parameters). */
+ *  predate the body parameters); v1–v4 seeds yield no name
+ *  (their layouts predate the identity foundation). A v5 name
+ *  block must be structurally exact — length byte within the
+ *  budget, total length matching, valid UTF-8 — or the seed is
+ *  rejected whole; a structurally sound name is then sanitized
+ *  like any other value. */
 export function decodeSeed(seed: unknown): Outfit | null {
   if (typeof seed !== 'string') return null;
   let body = seed.trim();
-  if (body.startsWith(PREFIX_V4)) body = body.slice(PREFIX_V4.length);
+  if (body.startsWith(PREFIX_V5)) body = body.slice(PREFIX_V5.length);
+  else if (body.startsWith(PREFIX_V4)) body = body.slice(PREFIX_V4.length);
   else if (body.startsWith(PREFIX_V3)) body = body.slice(PREFIX_V3.length);
   else if (body.startsWith(PREFIX_V2)) body = body.slice(PREFIX_V2.length);
   else if (body.startsWith(PREFIX_V1)) body = body.slice(PREFIX_V1.length);
   const bytes = base64UrlToBytes(body);
   if (!bytes) return null;
-  const at = (options: readonly string[], i: number): string =>
-    options[Math.min(options.length - 1, Math.max(0, bytes[i]))] ?? options[0];
 
-  if (bytes[0] === 1 && bytes.length === BYTE_COUNT_V1) {
+  // v5: split the name block off, leaving the v4 core (with the
+  // version byte rewritten to 4) for the shared decode below.
+  let name = '';
+  let core = bytes;
+  if (bytes[0] === 5) {
+    if (bytes.length < BYTE_COUNT_V4 + 1) return null;
+    const nameLen = bytes[BYTE_COUNT_V4];
+    if (nameLen > NAME_MAX_UTF8_BYTES) return null;
+    if (bytes.length !== BYTE_COUNT_V4 + 1 + nameLen) return null;
+    let nameText: string;
+    try {
+      nameText = new TextDecoder('utf-8', { fatal: true }).decode(
+        Uint8Array.from(bytes.slice(BYTE_COUNT_V4 + 1)),
+      );
+    } catch {
+      return null; // the name block is not valid UTF-8
+    }
+    name = sanitizeName(nameText);
+    core = bytes.slice(0, BYTE_COUNT_V4);
+    core[0] = 4;
+  }
+
+  const at = (options: readonly string[], i: number): string =>
+    options[Math.min(options.length - 1, Math.max(0, core[i]))] ?? options[0];
+
+  if (core[0] === 1 && core.length === BYTE_COUNT_V1) {
     return sanitizeOutfit({
       topStyle: at(TOP_STYLES, 6),
       topColor: at(TOP_COLORS, 7),
@@ -157,8 +206,8 @@ export function decodeSeed(seed: unknown): Outfit | null {
       accessory: at(ACCESSORIES, 10),
       pose: at(POSES, 11),
       character: {
-        skinTone: bytes[1] / 255,
-        height: Math.round((HEIGHT_MIN + bytes[2] / 100) * 100) / 100,
+        skinTone: core[1] / 255,
+        height: Math.round((HEIGHT_MIN + core[2] / 100) * 100) / 100,
         hairColor: at(HAIR_COLORS, 3),
         eyeColor: at(EYE_COLORS, 4),
         hairStyle: at(HAIR_STYLES, 5),
@@ -167,24 +216,26 @@ export function decodeSeed(seed: unknown): Outfit | null {
     });
   }
   if (
-    (bytes[0] === 2 && bytes.length === BYTE_COUNT_V2) ||
-    (bytes[0] === 3 && bytes.length === BYTE_COUNT_V3) ||
-    (bytes[0] === 4 && bytes.length === BYTE_COUNT_V4)
+    (core[0] === 2 && core.length === BYTE_COUNT_V2) ||
+    (core[0] === 3 && core.length === BYTE_COUNT_V3) ||
+    (core[0] === 4 && core.length === BYTE_COUNT_V4)
   ) {
     const face: Record<string, number> = {};
     FACE_PARAM_KEYS.forEach((key, i) => {
-      face[key] = dequantizeRange(key, bytes[6 + i]);
+      face[key] = dequantizeRange(key, core[6 + i]);
     });
     // v4 appends the body block after the v3 layout; for v2/v3
     // these keys are absent and sanitizeCharacter fills the
     // defaults (the pre-phase-3 body).
     const bodyParams: Record<string, number> = {};
-    if (bytes[0] === 4) {
+    if (core[0] === 4) {
       BODY_PARAM_KEYS.forEach((key, i) => {
-        bodyParams[key] = dequantizeRange(key, bytes[29 + i]);
+        bodyParams[key] = dequantizeRange(key, core[29 + i]);
       });
     }
     return sanitizeOutfit({
+      // Only v5 carries a name; for v2–v4 this is '' (unnamed).
+      name,
       topStyle: at(TOP_STYLES, 19),
       topColor: at(TOP_COLORS, 20),
       hat: at(HATS, 21),
@@ -194,7 +245,7 @@ export function decodeSeed(seed: unknown): Outfit | null {
       // v3 appends the bottoms/shoes block after the v2 layout;
       // for v2 these keys are absent and sanitizeOutfit fills the
       // defaults (no bottoms, the original flats).
-      ...(bytes[0] >= 3
+      ...(core[0] >= 3
         ? {
             bottomStyle: at(BOTTOM_STYLES, 25),
             bottomColor: at(BOTTOM_COLORS, 26),
@@ -203,10 +254,10 @@ export function decodeSeed(seed: unknown): Outfit | null {
           }
         : {}),
       character: {
-        skinTone: bytes[1] / 255,
+        skinTone: core[1] / 255,
         // Round back to whole centimeters so a decoded height is
         // the exact double the user picked, not 1.5999999999999999.
-        height: Math.round((HEIGHT_MIN + bytes[2] / 100) * 100) / 100,
+        height: Math.round((HEIGHT_MIN + core[2] / 100) * 100) / 100,
         hairColor: at(HAIR_COLORS, 3),
         eyeColor: at(EYE_COLORS, 4),
         hairStyle: at(HAIR_STYLES, 5),

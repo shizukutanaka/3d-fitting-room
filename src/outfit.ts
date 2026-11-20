@@ -13,6 +13,19 @@ export type AccessoryId = 'none' | 'necklace' | 'scarf' | 'bag';
 export type PoseId = 'stand' | 'wave' | 'cheer' | 'peace' | 'relax';
 
 export interface Outfit {
+  /** The person's display name — the identity anchor the whole
+   *  recognition loop keys on (docs/PERSPECTIVES-2.md viewpoint
+   *  6 / R2-2: a character is re-identified by name on the second
+   *  encounter). It is NOT a character parameter: it does not
+   *  live in CHARACTER_PARAM_SPECS, is never synthesized or
+   *  randomized, and a synthesized person starts unnamed. The
+   *  empty string is a regular state (naming is optional — no
+   *  mandatory names, no registry; PERSPECTIVES-2.md K2-8). The
+   *  name travels inside the seed (seed.ts v5) and on the share
+   *  card face (LEGAL-ETHICS.md judgment J-07 allows the display
+   *  name on the card); it is set by the user on their own
+   *  device and is never sent anywhere. */
+  name: string;
   topStyle: TopStyle;
   topColor: string;
   /** Lower-body garment. 'none' shows only the always-on base
@@ -81,6 +94,7 @@ export const ACCESSORIES: AccessoryId[] = ['none', 'necklace', 'scarf', 'bag'];
 export const POSES: PoseId[] = ['stand', 'wave', 'cheer', 'peace', 'relax'];
 
 export const DEFAULT_OUTFIT: Outfit = {
+  name: '',
   topStyle: 'tee',
   topColor: '#ff8fab',
   bottomStyle: 'none',
@@ -96,6 +110,44 @@ export const DEFAULT_OUTFIT: Outfit = {
 
 const STORAGE_KEY = 'fitting-room.outfit.v1';
 
+/** Display-name limits, pinned by tests: at most 24 characters
+ *  (counted in code points, so a Japanese name and an emoji name
+ *  are measured the same way) and at most 72 bytes as UTF-8 —
+ *  the byte budget is what the seed format reserves for the name
+ *  (seed.ts), so a name that fits here always fits in a seed. */
+export const NAME_MAX_CHARS = 24;
+export const NAME_MAX_UTF8_BYTES = 72;
+
+const utf8 = new TextEncoder();
+
+/** Validate an unknown value into a display name. Anything that
+ *  is not a plain, printable, single-line string degrades toward
+ *  the empty (unnamed) state rather than failing: control
+ *  characters are stripped, whitespace runs collapse to one
+ *  space, the ends are trimmed, and the result is truncated to
+ *  the limits above (the byte budget cuts at a code-point
+ *  boundary, never inside a character). Naming a person after a
+ *  real person is prohibited by the terms (LEGAL-ETHICS.md
+ *  judgment J-07); like the rest of that judgment, it is upheld
+ *  by the UI note, not by name matching — the app holds no list
+ *  of real people's names and checks against nothing. */
+export function sanitizeName(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  let out = '';
+  for (const ch of raw) {
+    const cp = ch.codePointAt(0) ?? 0;
+    if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f)) continue; // control chars
+    out += ch;
+  }
+  out = out.replace(/\s+/g, ' ').trim();
+  const chars = [...out];
+  if (chars.length > NAME_MAX_CHARS) out = chars.slice(0, NAME_MAX_CHARS).join('');
+  while (out && utf8.encode(out).length > NAME_MAX_UTF8_BYTES) {
+    out = [...out].slice(0, -1).join('');
+  }
+  return out;
+}
+
 function oneOf<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
   return typeof value === 'string' && (allowed as readonly string[]).includes(value)
     ? (value as T)
@@ -107,6 +159,9 @@ export function sanitizeOutfit(raw: unknown): Outfit {
   if (typeof raw !== 'object' || raw === null) return { ...DEFAULT_OUTFIT };
   const o = raw as Record<string, unknown>;
   return {
+    // Saves from before the identity foundation have no name
+    // key: they load unnamed, which is a regular state.
+    name: sanitizeName(o.name),
     topStyle: oneOf(o.topStyle, TOP_STYLES, DEFAULT_OUTFIT.topStyle),
     topColor:
       typeof o.topColor === 'string' && (TOP_COLORS as readonly string[]).includes(o.topColor)
@@ -160,6 +215,9 @@ function pick<T>(arr: readonly T[], rng: () => number): T {
 
 export function randomOutfit(rng: () => number = Math.random): Outfit {
   return {
+    // A name is never randomized into existence; callers that
+    // re-dress the current person merge their name back in.
+    name: '',
     topStyle: pick(TOP_STYLES, rng),
     topColor: pick(TOP_COLORS, rng),
     bottomStyle: pick(BOTTOM_STYLES, rng),

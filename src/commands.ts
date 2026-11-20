@@ -266,9 +266,10 @@ export function executeCommands(
         applied.push(`set_character ${cmd.param} = ${String(cmd.value)}`);
         break;
       case 'randomize_outfit': {
-        // Like the UI's random button: new clothes, same person.
+        // Like the UI's random button: new clothes, same person —
+        // the name is part of "same person" and is kept too.
         const r = randomOutfit(rng);
-        outfit = { ...r, character: outfit.character };
+        outfit = { ...r, character: outfit.character, name: outfit.name };
         applied.push('randomize_outfit');
         break;
       }
@@ -289,6 +290,10 @@ export function executeCommands(
         if (pa && pb) {
           outfit = {
             ...outfit,
+            // A synthesized person is a new person: neither
+            // parent's name carries over (a name is an identity
+            // anchor, not a trait — see genetics.ts).
+            name: '',
             character: synthesizeCharacter(pa.character, pb.character, cmd.mixSeed),
           };
           applied.push(`blend_characters mixSeed=${cmd.mixSeed}`);

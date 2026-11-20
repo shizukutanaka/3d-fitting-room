@@ -21,6 +21,14 @@ export interface ShareCardOptions {
   /** The seed string for this person + outfit: embedded into the
    *  PNG and printed on the card face. */
   seed: string;
+  /** The person's display name (optional). The card's default
+   *  form is a profile (docs/PERSPECTIVES-2.md viewpoint 6,
+   *  settled as standing): with a name, the name is the headline
+   *  and the app line moves beneath it — the card reads as this
+   *  person's profile. LEGAL-ETHICS.md judgment J-07 expressly
+   *  allows the display name on the card (product name, seed and
+   *  display name are the permitted inscriptions). */
+  name?: string;
 }
 
 /** Compose the share card and return it as a PNG blob with the
@@ -63,18 +71,39 @@ export async function composeShareCard(
   ctx.roundRect(px, py, photo, photo, 36);
   ctx.stroke();
 
-  // title block
+  // title block: profile form by default — a named person's
+  // name is the headline (shrunk to fit rather than clipped),
+  // and the app name + tagline become the byline. Unnamed
+  // people keep the original layout exactly.
   ctx.fillStyle = '#33302a';
   ctx.textAlign = 'center';
-  ctx.font = '700 58px "Hiragino Sans", "Noto Sans JP", sans-serif';
-  ctx.fillText(opts.appName, CARD_SIZE / 2, py + photo + 72);
-  ctx.font = '400 28px "Hiragino Sans", sans-serif';
-  ctx.fillStyle = '#8a7a63';
-  const sub =
-    getLang() === 'ja'
-      ? `${opts.tagline}（${opts.workingTitleNote}）`
-      : `${opts.tagline} (${opts.workingTitleNote})`;
-  ctx.fillText(sub, CARD_SIZE / 2, py + photo + 114);
+  const personName = (opts.name ?? '').trim();
+  if (personName) {
+    let size = 58;
+    ctx.font = `700 ${size}px "Hiragino Sans", "Noto Sans JP", sans-serif`;
+    while (size > 30 && ctx.measureText(personName).width > CARD_SIZE - 120) {
+      size -= 4;
+      ctx.font = `700 ${size}px "Hiragino Sans", "Noto Sans JP", sans-serif`;
+    }
+    ctx.fillText(personName, CARD_SIZE / 2, py + photo + 72);
+    ctx.font = '400 28px "Hiragino Sans", sans-serif';
+    ctx.fillStyle = '#8a7a63';
+    const sub =
+      getLang() === 'ja'
+        ? `${opts.appName} — ${opts.tagline}（${opts.workingTitleNote}）`
+        : `${opts.appName} — ${opts.tagline} (${opts.workingTitleNote})`;
+    ctx.fillText(sub, CARD_SIZE / 2, py + photo + 114);
+  } else {
+    ctx.font = '700 58px "Hiragino Sans", "Noto Sans JP", sans-serif';
+    ctx.fillText(opts.appName, CARD_SIZE / 2, py + photo + 72);
+    ctx.font = '400 28px "Hiragino Sans", sans-serif';
+    ctx.fillStyle = '#8a7a63';
+    const sub =
+      getLang() === 'ja'
+        ? `${opts.tagline}（${opts.workingTitleNote}）`
+        : `${opts.tagline} (${opts.workingTitleNote})`;
+    ctx.fillText(sub, CARD_SIZE / 2, py + photo + 114);
+  }
 
   // the seed, printed bare so it can be copied off the image by
   // eye and pasted into the app when the embedded chunk is gone

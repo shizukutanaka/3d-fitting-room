@@ -140,7 +140,7 @@ async function main() {
   results.checks.defaultSeed = await win.webContents.executeJavaScript(
     `window.__fittingRoom.getSeed()`,
   );
-  results.checks.defaultSeedIsV4 = String(results.checks.defaultSeed).startsWith('FR4-');
+  results.checks.defaultSeedIsV5 = String(results.checks.defaultSeed).startsWith('FR5-');
 
   // 1. the three bodies: state applies exactly, shots all differ
   const shots = {};
