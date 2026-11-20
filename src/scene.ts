@@ -67,7 +67,9 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
   controls.target.copy(homeTarget());
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
-  controls.minDistance = 1.5;
+  // Close enough to read the face: since phase 2 the face is
+  // editable, and editing it from full-body distance is pointless.
+  controls.minDistance = 0.5;
   controls.maxDistance = 4.8;
   controls.minPolarAngle = 0.35;
   controls.maxPolarAngle = Math.PI * 0.56;

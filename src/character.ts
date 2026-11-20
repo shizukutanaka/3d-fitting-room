@@ -44,7 +44,63 @@ export interface CharacterParams {
   /** Height in meters. The avatar is regenerated from the
    *  parameter vector whenever this changes. */
   height: number;
+  // ---- face (phase 2, first batch) ----
+  // The identity-bearing subset of the face space, per the
+  // 2026-11-20 plan audit (CHARACTER-SYSTEM.md §5.8): only
+  // parameters the lathe head can express as transforms of its
+  // parts. The defaults reproduce the pre-phase-2 fixed face,
+  // with one deliberate exception: asymmetry defaults to a small
+  // non-zero value, so the default face is subtly non-symmetric
+  // like a real one (the offsets are millimetre-scale). All of them
+  // are continuous feature values — there is deliberately no
+  // lineage/ethnicity parameter anywhere in this vector
+  // (LEGAL-ETHICS.md judgment J-01).
+  /** Eyeball size multiplier. */
+  eyeSize: number;
+  /** Eye spacing multiplier (distance from the midline). */
+  eyeSpacing: number;
+  /** Eye vertical offset, meters (head-local). */
+  eyeHeight: number;
+  /** Eyeball vertical squash: low = almond, high = round. */
+  eyeShape: number;
+  /** Eye tilt in radians; positive raises the outer corners. */
+  eyeTilt: number;
+  /** Brow vertical offset, meters (head-local). */
+  browHeight: number;
+  /** Brow tilt in radians; positive raises the outer ends. */
+  browTilt: number;
+  /** Nose width multiplier. */
+  noseWidth: number;
+  /** Nose prominence (depth) multiplier. */
+  noseProminence: number;
+  /** Mouth width multiplier. */
+  lipWidth: number;
+  /** Lip fullness multiplier. */
+  lipFullness: number;
+  /** Face width multiplier (skull horizontal scale). */
+  faceWidth: number;
+  /** Strength of the fixed natural asymmetry pattern (real faces
+   *  are not symmetric; a single knob instead of per-parameter
+   *  delta axes — see the §5.8 audit). 0 = perfectly symmetric. */
+  asymmetry: number;
 }
+
+/** The face parameter keys, in seed-encoding order (seed.ts). */
+export const FACE_PARAM_KEYS = [
+  'eyeSize',
+  'eyeSpacing',
+  'eyeHeight',
+  'eyeShape',
+  'eyeTilt',
+  'browHeight',
+  'browTilt',
+  'noseWidth',
+  'noseProminence',
+  'lipWidth',
+  'lipFullness',
+  'faceWidth',
+  'asymmetry',
+] as const satisfies ReadonlyArray<keyof CharacterParams>;
 
 type ParamSpec =
   | { kind: 'range'; min: number; max: number; def: number }
@@ -58,6 +114,19 @@ export const CHARACTER_PARAM_SPECS: Record<keyof CharacterParams, ParamSpec> = {
   eyeColor: { kind: 'palette', options: EYE_COLORS, def: '#2e2019' },
   hairStyle: { kind: 'enum', options: HAIR_STYLES, def: 'bob' },
   height: { kind: 'range', min: 1.45, max: 1.95, def: 1.74 },
+  eyeSize: { kind: 'range', min: 0.8, max: 1.25, def: 1 },
+  eyeSpacing: { kind: 'range', min: 0.85, max: 1.18, def: 1 },
+  eyeHeight: { kind: 'range', min: -0.01, max: 0.01, def: 0 },
+  eyeShape: { kind: 'range', min: 0.55, max: 0.95, def: 0.74 },
+  eyeTilt: { kind: 'range', min: -0.2, max: 0.2, def: 0 },
+  browHeight: { kind: 'range', min: -0.008, max: 0.008, def: 0 },
+  browTilt: { kind: 'range', min: -0.25, max: 0.25, def: 0 },
+  noseWidth: { kind: 'range', min: 0.75, max: 1.35, def: 1 },
+  noseProminence: { kind: 'range', min: 0.7, max: 1.4, def: 1 },
+  lipWidth: { kind: 'range', min: 0.75, max: 1.3, def: 1 },
+  lipFullness: { kind: 'range', min: 0.6, max: 1.6, def: 1 },
+  faceWidth: { kind: 'range', min: 0.9, max: 1.1, def: 1 },
+  asymmetry: { kind: 'range', min: 0, max: 1, def: 0.35 },
 };
 
 export const SKIN_TONE_MIN = 0;
@@ -73,6 +142,19 @@ export const DEFAULT_CHARACTER: CharacterParams = {
   eyeColor: '#2e2019',
   hairStyle: 'bob',
   height: 1.74,
+  eyeSize: 1,
+  eyeSpacing: 1,
+  eyeHeight: 0,
+  eyeShape: 0.74,
+  eyeTilt: 0,
+  browHeight: 0,
+  browTilt: 0,
+  noseWidth: 1,
+  noseProminence: 1,
+  lipWidth: 1,
+  lipFullness: 1,
+  faceWidth: 1,
+  asymmetry: 0.35,
 };
 
 function clampRange(value: unknown, spec: { min: number; max: number; def: number }): number {
@@ -87,18 +169,21 @@ function oneOfString(value: unknown, options: readonly string[], def: string): s
 /** Validate unknown data (parsed JSON, seed payloads) into a
  *  complete CharacterParams. Missing or invalid fields fall back
  *  to the spec defaults — this is what lets pre-character saves
- *  (which have no character data at all) load unchanged. */
+ *  (which have no character data at all) load unchanged, and what
+ *  lets a v1 seed (no face fields) decode to the default face.
+ *  The loop is driven by CHARACTER_PARAM_SPECS so a parameter
+ *  added to the specs is sanitized here automatically. */
 export function sanitizeCharacter(raw: unknown): CharacterParams {
   if (typeof raw !== 'object' || raw === null) return { ...DEFAULT_CHARACTER };
   const o = raw as Record<string, unknown>;
-  const s = CHARACTER_PARAM_SPECS;
-  return {
-    skinTone: clampRange(o.skinTone, s.skinTone as { min: number; max: number; def: number }),
-    hairColor: oneOfString(o.hairColor, HAIR_COLORS, DEFAULT_CHARACTER.hairColor),
-    eyeColor: oneOfString(o.eyeColor, EYE_COLORS, DEFAULT_CHARACTER.eyeColor),
-    hairStyle: oneOfString(o.hairStyle, HAIR_STYLES, DEFAULT_CHARACTER.hairStyle) as HairStyleId,
-    height: clampRange(o.height, s.height as { min: number; max: number; def: number }),
-  };
+  const out: Record<string, unknown> = { ...DEFAULT_CHARACTER };
+  for (const [name, spec] of Object.entries(CHARACTER_PARAM_SPECS)) {
+    out[name] =
+      spec.kind === 'range'
+        ? clampRange(o[name], spec)
+        : oneOfString(o[name], spec.options, spec.def);
+  }
+  return out as unknown as CharacterParams;
 }
 
 // ---- skin tone -> color ----

@@ -28,7 +28,9 @@ import {
   type Outfit,
 } from './outfit';
 import {
+  CHARACTER_PARAM_SPECS,
   EYE_COLORS,
+  FACE_PARAM_KEYS,
   HAIR_COLORS,
   HAIR_STYLES,
   HEIGHT_MAX,
@@ -146,6 +148,56 @@ function renderOptions(): void {
     skinRow.append(el('span', 'slider-label', t('ui.skinTone')), skin, skinVal);
     nodes.push(skinRow);
 
+    // face: the phase-2 identity parameters (CHARACTER-SYSTEM.md
+    // §5 phase 2, trimmed by the §5.8 audit). One generic range row
+    // per parameter, driven by the specs in character.ts. Labels
+    // name features only — no lineage/ethnicity wording anywhere
+    // in the UI (LEGAL-ETHICS.md judgment J-01).
+    const rangeRow = (
+      label: string,
+      value: number,
+      min: number,
+      max: number,
+      fmt: (v: number) => string,
+      apply: (v: number) => void,
+    ): HTMLDivElement => {
+      const row = el('div', 'slider-row');
+      const val = el('span', 'slider-val', fmt(value));
+      const input = el('input', 'slider');
+      input.type = 'range';
+      input.min = String(min);
+      input.max = String(max);
+      input.step = String((max - min) / 200);
+      input.value = String(value);
+      input.setAttribute('aria-label', label);
+      input.addEventListener('input', () => {
+        const v = Number(input.value);
+        apply(v);
+        val.textContent = fmt(v);
+      });
+      input.addEventListener('change', () => renderOptions());
+      row.append(el('span', 'slider-label', label), input, val);
+      return row;
+    };
+    const fmtMm = (v: number): string => `${v >= 0 ? '+' : ''}${Math.round(v * 1000)} mm`;
+    const fmtDeg = (v: number): string =>
+      `${v >= 0 ? '+' : ''}${Math.round((v * 180) / Math.PI)}°`;
+    const faceFmt = (param: (typeof FACE_PARAM_KEYS)[number], def: number): ((v: number) => string) => {
+      switch (param) {
+        case 'eyeHeight':
+        case 'browHeight':
+          return fmtMm;
+        case 'eyeTilt':
+        case 'browTilt':
+          return fmtDeg;
+        case 'asymmetry':
+          return (v) => `${Math.round(v * 100)}%`;
+        default:
+          return (v) => `${Math.round((v / def) * 100)}%`;
+      }
+    };
+
+
     // height: regenerated profile + camera/mirror follow
     const heightRow = el('div', 'slider-row');
     const cm = Math.round(c.height * 100);
@@ -165,6 +217,22 @@ function renderOptions(): void {
     height.addEventListener('change', () => renderOptions());
     heightRow.append(el('span', 'slider-label', t('ui.height')), height, heightVal);
     nodes.push(heightRow);
+
+    nodes.push(el('span', 'group-label', t('ui.face')));
+    for (const param of FACE_PARAM_KEYS) {
+      const spec = CHARACTER_PARAM_SPECS[param];
+      if (spec.kind !== 'range') continue;
+      nodes.push(
+        rangeRow(
+          t(`face.${param}` as I18nKey),
+          c[param],
+          spec.min,
+          spec.max,
+          faceFmt(param, spec.def),
+          (v) => patchCharacter({ [param]: v } as Partial<CharacterParams>),
+        ),
+      );
+    }
 
     // hairstyle chips
     nodes.push(el('span', 'group-label', t('ui.hairStyle')));
@@ -358,7 +426,9 @@ renderOptions();
 const clock = new THREE.Clock();
 function loop(): void {
   const tSec = clock.getElapsedTime();
-  rig.tick(tSec);
+  // The camera position is the gaze target: the avatar's eyes
+  // track whoever is looking at it (see avatar.ts gaze).
+  rig.tick(tSec, stage.camera.position);
   stage.tick(tSec);
   stage.renderer.render(stage.scene, stage.camera);
   requestAnimationFrame(loop);
@@ -380,6 +450,10 @@ interface FittingRoomBridge {
   getSeed(): string;
   setSeed(seed: string): boolean;
   cardDataURL(): Promise<string>;
+  /** Move the camera to a close-up of the face at an azimuth
+   *  angle (degrees, 0 = front). Verification uses it to read the
+   *  eyes and gaze; it is equally handy in devtools. */
+  focusFace(angleDeg?: number): void;
 }
 const bridge: FittingRoomBridge = {
   ready: true,
@@ -405,6 +479,15 @@ const bridge: FittingRoomBridge = {
       reader.onerror = () => reject(reader.error);
       reader.readAsDataURL(blob);
     });
+  },
+  focusFace: (angleDeg = 0) => {
+    const p = new THREE.Vector3();
+    rig.head.getWorldPosition(p);
+    const r = 0.62;
+    const a = (angleDeg * Math.PI) / 180;
+    stage.camera.position.set(p.x + Math.sin(a) * r, p.y + 0.01, p.z + Math.cos(a) * r);
+    stage.controls.target.copy(p);
+    stage.controls.update();
   },
 };
 (window as unknown as { __fittingRoom: FittingRoomBridge }).__fittingRoom = bridge;

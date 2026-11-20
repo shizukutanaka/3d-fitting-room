@@ -232,7 +232,7 @@ const lensMat = new THREE.MeshStandardMaterial({
 function temples(mat: THREE.Material, thick = 0.0016): THREE.Group {
   const g = new THREE.Group();
   for (const side of [-1, 1]) {
-    g.add(mesh(new THREE.BoxGeometry(thick, thick, 0.088), mat, side * 0.0555, 0.004, -0.04));
+    g.add(mesh(new THREE.BoxGeometry(thick, thick, 0.102), mat, side * 0.0555, 0.004, -0.047));
   }
   return g;
 }
