@@ -7,7 +7,6 @@ export type HatId = 'none' | 'cap' | 'beanie' | 'catears' | 'ribbon';
 export type GlassesId = 'none' | 'round' | 'square' | 'sunglasses';
 export type AccessoryId = 'none' | 'necklace' | 'scarf' | 'bag';
 export type PoseId = 'stand' | 'wave' | 'cheer' | 'peace' | 'relax';
-export type ExpressionId = 'normal' | 'happy' | 'wink' | 'surprised' | 'sleepy';
 
 export interface Outfit {
   topStyle: TopStyle;
@@ -16,7 +15,6 @@ export interface Outfit {
   glasses: GlassesId;
   accessory: AccessoryId;
   pose: PoseId;
-  expression: ExpressionId;
 }
 
 /** Color swatches offered for tops. */
@@ -35,7 +33,6 @@ export const HATS: HatId[] = ['none', 'cap', 'beanie', 'catears', 'ribbon'];
 export const GLASSES: GlassesId[] = ['none', 'round', 'square', 'sunglasses'];
 export const ACCESSORIES: AccessoryId[] = ['none', 'necklace', 'scarf', 'bag'];
 export const POSES: PoseId[] = ['stand', 'wave', 'cheer', 'peace', 'relax'];
-export const EXPRESSIONS: ExpressionId[] = ['normal', 'happy', 'wink', 'surprised', 'sleepy'];
 
 export const DEFAULT_OUTFIT: Outfit = {
   topStyle: 'tee',
@@ -44,7 +41,6 @@ export const DEFAULT_OUTFIT: Outfit = {
   glasses: 'none',
   accessory: 'none',
   pose: 'stand',
-  expression: 'normal',
 };
 
 const STORAGE_KEY = 'fitting-room.outfit.v1';
@@ -69,7 +65,6 @@ export function sanitizeOutfit(raw: unknown): Outfit {
     glasses: oneOf(o.glasses, GLASSES, DEFAULT_OUTFIT.glasses),
     accessory: oneOf(o.accessory, ACCESSORIES, DEFAULT_OUTFIT.accessory),
     pose: oneOf(o.pose, POSES, DEFAULT_OUTFIT.pose),
-    expression: oneOf(o.expression, EXPRESSIONS, DEFAULT_OUTFIT.expression),
   };
 }
 
@@ -103,6 +98,5 @@ export function randomOutfit(rng: () => number = Math.random): Outfit {
     glasses: pick(GLASSES, rng),
     accessory: pick(ACCESSORIES, rng),
     pose: pick(POSES, rng),
-    expression: pick(EXPRESSIONS, rng),
   };
 }

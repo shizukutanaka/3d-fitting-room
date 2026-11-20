@@ -1,8 +1,8 @@
 :root {
-  --ink: #43303e;
-  --ink-soft: #9a6b84;
-  --accent: #ff5d8f;
-  --accent-soft: #ffe3ee;
+  --ink: #37312b;
+  --ink-soft: #8d7c68;
+  --accent: #9c6b30;
+  --accent-soft: #ecdfc9;
   --panel: rgba(255, 255, 255, 0.88);
   --chip: #ffffff;
   --radius: 16px;
@@ -15,11 +15,11 @@ body {
 
 body {
   margin: 0;
-  font-family: "Hiragino Maru Gothic ProN", "Hiragino Sans", "Noto Sans JP",
+  font-family: "Hiragino Sans", "Noto Sans JP",
     system-ui, sans-serif;
   color: var(--ink);
   overflow: hidden;
-  background: #fdeef4;
+  background: #efe9df;
 }
 
 #gl {
@@ -92,7 +92,7 @@ body {
   border-radius: 999px;
   font-size: 14px;
   z-index: 20;
-  box-shadow: 0 6px 20px rgba(67, 48, 62, 0.3);
+  box-shadow: 0 6px 20px rgba(55, 49, 43, 0.3);
 }
 
 #panel {
@@ -105,7 +105,7 @@ body {
   backdrop-filter: blur(10px);
   border-radius: 22px;
   padding: 12px 14px 10px;
-  box-shadow: 0 10px 34px rgba(190, 90, 130, 0.22);
+  box-shadow: 0 10px 34px rgba(90, 70, 40, 0.22);
 }
 
 #tabs {

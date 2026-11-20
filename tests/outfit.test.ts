@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   ACCESSORIES,
   DEFAULT_OUTFIT,
-  EXPRESSIONS,
   GLASSES,
   HATS,
   POSES,
@@ -76,7 +75,6 @@ describe('outfit state', () => {
       expect(GLASSES).toContain(o.glasses);
       expect(ACCESSORIES).toContain(o.accessory);
       expect(POSES).toContain(o.pose);
-      expect(EXPRESSIONS).toContain(o.expression);
     }
   });
 });

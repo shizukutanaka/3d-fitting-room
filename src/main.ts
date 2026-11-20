@@ -17,7 +17,6 @@ import {
 } from './i18n';
 import {
   ACCESSORIES,
-  EXPRESSIONS,
   GLASSES,
   HATS,
   POSES,
@@ -42,14 +41,13 @@ stage.scene.add(rig.root);
 let outfit: Outfit = loadOutfit();
 applyOutfit(rig, outfit);
 
-type TabId = 'tops' | 'hat' | 'glasses' | 'accessory' | 'pose' | 'expression';
+type TabId = 'tops' | 'hat' | 'glasses' | 'accessory' | 'pose';
 const TABS: Array<{ id: TabId; key: I18nKey }> = [
   { id: 'tops', key: 'cat.tops' },
   { id: 'hat', key: 'cat.hat' },
   { id: 'glasses', key: 'cat.glasses' },
   { id: 'accessory', key: 'cat.accessory' },
   { id: 'pose', key: 'cat.pose' },
-  { id: 'expression', key: 'cat.expression' },
 ];
 let activeTab: TabId = 'tops';
 
@@ -147,14 +145,6 @@ function renderOptions(): void {
     for (const id of POSES) {
       nodes.push(
         chip(t(key('pose', id)), outfit.pose === id, () => update({ ...outfit, pose: id })),
-      );
-    }
-  } else {
-    for (const id of EXPRESSIONS) {
-      nodes.push(
-        chip(t(key('expr', id)), outfit.expression === id, () =>
-          update({ ...outfit, expression: id }),
-        ),
       );
     }
   }

@@ -26,8 +26,8 @@ export function composeShareCard(
 
   // background: soft vertical gradient
   const grad = ctx.createLinearGradient(0, 0, 0, CARD_SIZE);
-  grad.addColorStop(0, '#fff5f9');
-  grad.addColorStop(1, '#ffd9e8');
+  grad.addColorStop(0, '#faf6f0');
+  grad.addColorStop(1, '#e7dbc7');
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, CARD_SIZE, CARD_SIZE);
 
@@ -51,12 +51,12 @@ export function composeShareCard(
   ctx.stroke();
 
   // title block
-  ctx.fillStyle = '#43303e';
+  ctx.fillStyle = '#33302a';
   ctx.textAlign = 'center';
-  ctx.font = '700 64px "Hiragino Maru Gothic ProN", "Hiragino Sans", sans-serif';
+  ctx.font = '700 64px "Hiragino Sans", "Noto Sans JP", sans-serif';
   ctx.fillText(opts.appName, CARD_SIZE / 2, py + photo + 82);
   ctx.font = '400 30px "Hiragino Sans", sans-serif';
-  ctx.fillStyle = '#9a6b84';
+  ctx.fillStyle = '#8a7a63';
   const sub =
     getLang() === 'ja'
       ? `${opts.tagline}（${opts.workingTitleNote}）`
