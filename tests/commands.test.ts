@@ -4,7 +4,13 @@ import {
   executeCommands,
   validateCommands,
 } from '../src/commands';
-import { CHARACTER_PARAM_SPECS, FACE_PARAM_KEYS } from '../src/character';
+import {
+  BODY_PARAM_KEYS,
+  CHARACTER_PARAM_SPECS,
+  FACE_PARAM_KEYS,
+  YOUTH_SCORE_MAX,
+  youthScore,
+} from '../src/character';
 import {
   BOTTOM_COLORS,
   BOTTOM_STYLES,
@@ -158,6 +164,41 @@ describe('executeCommands', () => {
     if (spec.kind === 'range') expect(result.outfit.character.noseWidth).toBe(spec.max);
   });
 
+  it('applies body parameters through the same set_character command', () => {
+    const { commands, rejected } = validateCommands([
+      { type: 'set_character', param: 'shoulderWidth', value: 1.1 },
+      { type: 'set_character', param: 'waist', value: 0.9 },
+      { type: 'set_character', param: 'bust', value: 99 },
+    ]);
+    expect(rejected).toEqual([]);
+    const result = executeCommands(commands, DEFAULT_OUTFIT);
+    expect(result.outfit.character.shoulderWidth).toBe(1.1);
+    expect(result.outfit.character.waist).toBe(0.9);
+    const spec = CHARACTER_PARAM_SPECS.bust;
+    expect(spec.kind).toBe('range');
+    if (spec.kind === 'range') expect(result.outfit.character.bust).toBe(spec.max);
+  });
+
+  it('the adult safety restriction (CUS-0779) cannot be routed around via commands', () => {
+    // An LLM (or a prompt-injected one) asking for the full
+    // minor-like combination, one valid in-range command at a
+    // time: every command is individually legal, so validation
+    // accepts them all — the combination must still never land.
+    const { commands, rejected } = validateCommands([
+      { type: 'set_character', param: 'height', value: 1.45 },
+      { type: 'set_character', param: 'bust', value: 0.8 },
+      { type: 'set_character', param: 'waist', value: 1.22 },
+      { type: 'set_character', param: 'hip', value: 0.86 },
+      { type: 'set_character', param: 'build', value: 0.85 },
+      { type: 'set_character', param: 'shoulderWidth', value: 0.88 },
+    ]);
+    expect(rejected).toEqual([]);
+    const result = executeCommands(commands, DEFAULT_OUTFIT);
+    expect(youthScore(result.outfit.character)).toBeLessThanOrEqual(YOUTH_SCORE_MAX + 1e-9);
+    expect(result.outfit.character.bust).toBeGreaterThan(0.8);
+    expect(result.outfit.character.height).toBe(1.45);
+  });
+
   it('randomize_outfit keeps the person and changes the clothes', () => {
     const { commands } = validateCommands([{ type: 'randomize_outfit' }]);
     const result = executeCommands(commands, DEFAULT_OUTFIT, () => 0);
@@ -179,6 +220,13 @@ describe('describeCommandProtocol', () => {
     }
     expect(text).toContain('set_pose');
     expect(text).toContain('share_card');
+  });
+
+  it('covers the body parameters from the same dynamic generation', () => {
+    const text = describeCommandProtocol();
+    for (const key of BODY_PARAM_KEYS) {
+      expect(text).toContain(`"param":"${key}"`);
+    }
   });
 
   it('covers the face parameters and the bottoms/shoes catalogs from their sources', () => {

@@ -7,6 +7,7 @@
 
 import * as THREE from 'three';
 import { latheFromProfile, type AvatarRig } from './avatar';
+import { bodyRadiusFactor, legGirthFactor, type CharacterParams } from './character';
 import { fabricTextures, leatherTextures, ribbedBump } from './textures';
 import type {
   AccessoryId,
@@ -39,40 +40,65 @@ function fabricMat(color: string, roughness = 0.85): THREE.MeshStandardMaterial 
 
 // ---------- tops (anchor: torso center, y=1.12 in root space) ----------
 // Profiles mirror the base torso's silhouette, offset ~11 mm out.
+// Auto-fit: every profile radius passes through the same
+// bodyRadiusFactor() the body itself uses (character.ts), at the
+// point's absolute height — so when the wearer's waist, bust, hip
+// or build changes, the garment is re-sewn around the new body
+// instead of clipping into it or floating off it. At the default
+// body the factor is 1 and the original profiles come out
+// unchanged. The ~11 mm offset scales with the factor too, which
+// is how real ease behaves (bigger body, slightly more ease).
 
-function buildTop(style: TopStyle, cloth: THREE.Material): THREE.Group {
+const TORSO_ANCHOR_Y = 1.12;
+const WAIST_ANCHOR_Y = 0.95;
+
+function shapeTop(profile: Array<[number, number]>, c: CharacterParams): Array<[number, number]> {
+  return profile.map(([r, y]): [number, number] => [r * bodyRadiusFactor(y + TORSO_ANCHOR_Y, c), y]);
+}
+
+function shapeBottom(profile: Array<[number, number]>, c: CharacterParams): Array<[number, number]> {
+  return profile.map(([r, y]): [number, number] => [r * bodyRadiusFactor(y + WAIST_ANCHOR_Y, c), y]);
+}
+
+function buildTop(style: TopStyle, cloth: THREE.Material, c: CharacterParams): THREE.Group {
   const g = new THREE.Group();
   if (style === 'tee') {
     const top = latheFromProfile(
-      [
-        [0.149, -0.275],
-        [0.156, -0.24],
-        [0.151, -0.18],
-        [0.131, -0.1],
-        [0.132, -0.04],
-        [0.157, 0.05],
-        [0.152, 0.13],
-        [0.128, 0.215],
-        [0.086, 0.27],
-        [0.06, 0.295],
-      ],
+      shapeTop(
+        [
+          [0.149, -0.275],
+          [0.156, -0.24],
+          [0.151, -0.18],
+          [0.131, -0.1],
+          [0.132, -0.04],
+          [0.157, 0.05],
+          [0.152, 0.13],
+          [0.128, 0.215],
+          [0.086, 0.27],
+          [0.06, 0.295],
+        ],
+        c,
+      ),
       cloth,
     );
     top.scale.set(1, 1, 0.8);
     g.add(top);
   } else if (style === 'hoodie') {
     const top = latheFromProfile(
-      [
-        [0.165, -0.28],
-        [0.168, -0.2],
-        [0.15, -0.1],
-        [0.152, -0.03],
-        [0.172, 0.05],
-        [0.166, 0.13],
-        [0.14, 0.215],
-        [0.092, 0.27],
-        [0.064, 0.295],
-      ],
+      shapeTop(
+        [
+          [0.165, -0.28],
+          [0.168, -0.2],
+          [0.15, -0.1],
+          [0.152, -0.03],
+          [0.172, 0.05],
+          [0.166, 0.13],
+          [0.14, 0.215],
+          [0.092, 0.27],
+          [0.064, 0.295],
+        ],
+        c,
+      ),
       cloth,
     );
     top.scale.set(1, 1, 0.8);
@@ -81,7 +107,12 @@ function buildTop(style: TopStyle, cloth: THREE.Material): THREE.Group {
     hood.rotation.x = 1.25;
     hood.scale.set(1, 1, 0.8);
     g.add(hood);
-    g.add(mesh(new THREE.BoxGeometry(0.17, 0.095, 0.028), cloth, 0, -0.155, 0.125));
+    // The pocket rides on the belly: push it out with the body's
+    // radius factor at its height so a larger build does not
+    // swallow it.
+    const pocket = mesh(new THREE.BoxGeometry(0.17, 0.095, 0.028), cloth, 0, -0.155, 0.125);
+    pocket.position.z = 0.125 * bodyRadiusFactor(0.965, c);
+    g.add(pocket);
     const stringMat = new THREE.MeshStandardMaterial({ color: '#e8e2d6', roughness: 0.8 });
     for (const side of [-1, 1]) {
       g.add(mesh(new THREE.CylinderGeometry(0.0035, 0.0035, 0.055, 8), stringMat, side * 0.018, 0.185, 0.098));
@@ -89,19 +120,22 @@ function buildTop(style: TopStyle, cloth: THREE.Material): THREE.Group {
   } else {
     // dress: fitted bodice flowing into a flared skirt in one lathe
     const dress = latheFromProfile(
-      [
-        [0.06, 0.295],
-        [0.086, 0.27],
-        [0.128, 0.215],
-        [0.152, 0.13],
-        [0.157, 0.05],
-        [0.132, -0.04],
-        [0.13, -0.115],
-        [0.148, -0.2],
-        [0.18, -0.36],
-        [0.218, -0.52],
-        [0.248, -0.66],
-      ],
+      shapeTop(
+        [
+          [0.06, 0.295],
+          [0.086, 0.27],
+          [0.128, 0.215],
+          [0.152, 0.13],
+          [0.157, 0.05],
+          [0.132, -0.04],
+          [0.13, -0.115],
+          [0.148, -0.2],
+          [0.18, -0.36],
+          [0.218, -0.52],
+          [0.248, -0.66],
+        ],
+        c,
+      ),
       cloth,
     );
     dress.scale.set(1, 1, 0.8);
@@ -111,9 +145,11 @@ function buildTop(style: TopStyle, cloth: THREE.Material): THREE.Group {
       roughness: 0.35,
       envMapIntensity: 0.8,
     });
+    // The waist band follows the shaped waist at its height.
+    const bandF = bodyRadiusFactor(1.005, c);
     const band = mesh(new THREE.TorusGeometry(0.13, 0.011, 10, 40), satin, 0, -0.115, 0);
     band.rotation.x = Math.PI / 2;
-    band.scale.set(1, 0.8, 1);
+    band.scale.set(bandF, 0.8 * bandF, bandF);
     g.add(band);
   }
   return g;
@@ -132,17 +168,22 @@ function buildTop(style: TopStyle, cloth: THREE.Material): THREE.Group {
  *  the pelvis and the tops of the thighs, ending where the leg
  *  tubes take over. Profiles here are ordered bottom -> top, like
  *  the body's own lathes (avatar.ts): latheFromProfile's winding
- *  faces outward only in that order for FrontSide materials. */
-function hipBlock(cloth: THREE.Material): THREE.Mesh {
+ *  faces outward only in that order for FrontSide materials.
+ *  Shaped by shapeBottom() like the tops, so the block re-wraps a
+ *  changed pelvis instead of clipping it. */
+function hipBlock(cloth: THREE.Material, c: CharacterParams): THREE.Mesh {
   const hip = latheFromProfile(
-    [
-      [0.168, -0.2],
-      [0.18, -0.16],
-      [0.186, -0.11],
-      [0.184, -0.06],
-      [0.172, -0.01],
-      [0.15, 0.045],
-    ],
+    shapeBottom(
+      [
+        [0.168, -0.2],
+        [0.18, -0.16],
+        [0.186, -0.11],
+        [0.184, -0.06],
+        [0.172, -0.01],
+        [0.15, 0.045],
+      ],
+      c,
+    ),
     cloth,
   );
   hip.scale.set(1, 1, 0.8);
@@ -153,29 +194,36 @@ function legTube(
   profile: Array<[number, number]>,
   cloth: THREE.Material,
   side: number,
+  girthF: number,
 ): THREE.Mesh {
-  const leg = latheFromProfile(profile, cloth);
+  const leg = latheFromProfile(
+    profile.map(([r, y]): [number, number] => [r * girthF, y]),
+    cloth,
+  );
   leg.position.x = side * 0.096;
   leg.scale.set(1, 1, 0.92);
   return leg;
 }
 
-function buildBottom(style: BottomStyle, cloth: THREE.Material): THREE.Group | null {
+function buildBottom(style: BottomStyle, cloth: THREE.Material, c: CharacterParams): THREE.Group | null {
   const g = new THREE.Group();
   switch (style) {
     case 'none':
       return null;
     case 'skirt': {
       const skirt = latheFromProfile(
-        [
-          [0.232, -0.43],
-          [0.216, -0.33],
-          [0.196, -0.22],
-          [0.182, -0.13],
-          [0.176, -0.065],
-          [0.166, -0.03],
-          [0.147, 0.03],
-        ],
+        shapeBottom(
+          [
+            [0.232, -0.43],
+            [0.216, -0.33],
+            [0.196, -0.22],
+            [0.182, -0.13],
+            [0.176, -0.065],
+            [0.166, -0.03],
+            [0.147, 0.03],
+          ],
+          c,
+        ),
         cloth,
       );
       skirt.scale.set(1, 1, 0.8);
@@ -183,7 +231,7 @@ function buildBottom(style: BottomStyle, cloth: THREE.Material): THREE.Group | n
       return g;
     }
     case 'pants': {
-      g.add(hipBlock(cloth));
+      g.add(hipBlock(cloth, c));
       // Radii clear the thigh capsule (r 0.067, its cylinder part
       // reaching down to abs 0.52) by a trouser-like margin; the
       // first build hugged the knee line and the capsule's lower
@@ -201,18 +249,18 @@ function buildBottom(style: BottomStyle, cloth: THREE.Material): THREE.Group | n
         [0.086, -0.17],
         [0.088, -0.11],
       ];
-      for (const side of [-1, 1]) g.add(legTube(legProfile, cloth, side));
+      for (const side of [-1, 1]) g.add(legTube(legProfile, cloth, side, legGirthFactor(c)));
       return g;
     }
     case 'shorts': {
-      g.add(hipBlock(cloth));
+      g.add(hipBlock(cloth, c));
       const legProfile: Array<[number, number]> = [
         [0.083, -0.3],
         [0.084, -0.24],
         [0.087, -0.17],
         [0.089, -0.11],
       ];
-      for (const side of [-1, 1]) g.add(legTube(legProfile, cloth, side));
+      for (const side of [-1, 1]) g.add(legTube(legProfile, cloth, side, legGirthFactor(c)));
       return g;
     }
   }
@@ -486,7 +534,10 @@ const goldMat = new THREE.MeshStandardMaterial({
   envMapIntensity: 1.3,
 });
 
-function buildAccessory(id: AccessoryId): { group: THREE.Group; anchor: 'neck' | 'bag' } | null {
+function buildAccessory(
+  id: AccessoryId,
+  c: CharacterParams,
+): { group: THREE.Group; anchor: 'neck' | 'bag' } | null {
   const g = new THREE.Group();
   switch (id) {
     case 'none':
@@ -494,7 +545,10 @@ function buildAccessory(id: AccessoryId): { group: THREE.Group; anchor: 'neck' |
     case 'necklace': {
       // The chain is a tube along a curve fitted to the chest's
       // surface (computed from the torso profile) — a tilted torus
-      // either floats off the bust or sinks into it.
+      // either floats off the bust or sinks into it. The whole
+      // drape is pushed out (or pulled in) with the bust, so the
+      // chain keeps lying on the chest when the body changes.
+      g.scale.z = 1 + (c.bust - 1) * 0.55;
       const curve = new THREE.CatmullRomCurve3([
         new THREE.Vector3(-0.042, 0.005, 0.012),
         new THREE.Vector3(-0.052, -0.045, 0.062),
@@ -567,7 +621,7 @@ export function applyOutfit(rig: AvatarRig, outfit: Outfit): void {
   rig.topMaterial.color.set(outfit.topColor);
 
   clearAnchor(rig.torsoAnchor);
-  rig.torsoAnchor.add(buildTop(outfit.topStyle, rig.topMaterial));
+  rig.torsoAnchor.add(buildTop(outfit.topStyle, rig.topMaterial, outfit.character));
 
   // A dress is a one-piece: it already covers waist to knee, so
   // bottoms are not rendered under it (the selection is kept in
@@ -575,7 +629,7 @@ export function applyOutfit(rig: AvatarRig, outfit: Outfit): void {
   // itself is part of the body and is never removed (J-10).
   clearAnchor(rig.bottomAnchor);
   if (outfit.topStyle !== 'dress' && outfit.bottomStyle !== 'none') {
-    const bottom = buildBottom(outfit.bottomStyle, fabricMat(outfit.bottomColor));
+    const bottom = buildBottom(outfit.bottomStyle, fabricMat(outfit.bottomColor), outfit.character);
     if (bottom) rig.bottomAnchor.add(bottom);
   }
 
@@ -592,7 +646,7 @@ export function applyOutfit(rig: AvatarRig, outfit: Outfit): void {
 
   clearAnchor(rig.neckAnchor);
   clearAnchor(rig.bagAnchor);
-  const acc = buildAccessory(outfit.accessory);
+  const acc = buildAccessory(outfit.accessory, outfit.character);
   if (acc) {
     (acc.anchor === 'neck' ? rig.neckAnchor : rig.bagAnchor).add(acc.group);
   }

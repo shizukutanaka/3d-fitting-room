@@ -7,9 +7,11 @@ import {
   HAIR_STYLES,
   HEIGHT_MAX,
   HEIGHT_MIN,
+  YOUTH_SCORE_MAX,
   fitzpatrickLabel,
   sanitizeCharacter,
   skinColorForTone,
+  youthScore,
 } from '../src/character';
 import {
   BOTTOM_COLORS,
@@ -169,7 +171,7 @@ describe('skin tone mapping', () => {
   });
 });
 
-describe('seed encoding (phase 0, format v3 since bottoms/shoes)', () => {
+describe('seed encoding (phase 0, format v4 since body parameters)', () => {
   const custom: Outfit = {
     topStyle: 'dress',
     topColor: '#3a4152',
@@ -370,12 +372,168 @@ describe('seed encoding (phase 0, format v3 since bottoms/shoes)', () => {
     // version byte and the length must agree).
     const mismatched = `FR3-${Buffer.from([2, ...new Array(28).fill(0)]).toString('base64url')}`;
     expect(decodeSeed(mismatched)).toBeNull();
+    expect(decodeSeed('FR4-AAAA')).toBeNull();
+    // A v4-length payload carrying the v3 version byte.
+    const mismatched4 = `FR4-${Buffer.from([3, ...new Array(33).fill(0)]).toString('base64url')}`;
+    expect(decodeSeed(mismatched4)).toBeNull();
   });
 
   it('produces a short, recognizable string', () => {
     const seed = encodeSeed(DEFAULT_OUTFIT);
-    expect(seed.startsWith('FR3-')).toBe(true);
-    expect(seed.length).toBeLessThanOrEqual(48);
+    expect(seed.startsWith('FR4-')).toBe(true);
+    // 34 payload bytes -> 46 base64url chars + the 4-char prefix.
+    // The bound grows with each format version's payload; what
+    // matters is that a seed stays short enough to print on a
+    // share card and type by hand.
+    expect(seed.length).toBeLessThanOrEqual(52);
+  });
+
+  it('round-trips the body parameters within quantization (1/255 of range)', () => {
+    const state: Outfit = {
+      ...DEFAULT_OUTFIT,
+      character: {
+        ...DEFAULT_CHARACTER,
+        height: 1.68,
+        shoulderWidth: 1.1,
+        waist: 0.9,
+        hip: 1.12,
+        bust: 1.18,
+        build: 0.95,
+      },
+    };
+    const back = decodeSeed(encodeSeed(state));
+    expect(back).not.toBeNull();
+    const got = back!.character;
+    const tol = (min: number, max: number) => (max - min) / 255 + 1e-9;
+    expect(Math.abs(got.shoulderWidth - 1.1)).toBeLessThanOrEqual(tol(0.88, 1.14));
+    expect(Math.abs(got.waist - 0.9)).toBeLessThanOrEqual(tol(0.82, 1.22));
+    expect(Math.abs(got.hip - 1.12)).toBeLessThanOrEqual(tol(0.86, 1.2));
+    expect(Math.abs(got.bust - 1.18)).toBeLessThanOrEqual(tol(0.8, 1.3));
+    expect(Math.abs(got.build - 0.95)).toBeLessThanOrEqual(tol(0.85, 1.2));
+    expect(encodeSeed(back!)).toBe(encodeSeed(state));
+  });
+
+  it('still decodes v3 seeds (pre-body format) with the default body', () => {
+    // Hand-built v3 payload: the v2 layout plus the bottoms/shoes
+    // block at indices 25..28.
+    const bytes = [
+      3, 204, 26, 6, 4, 2, ...new Array(13).fill(128), 1, 2, 1, 1, 1, 1, 2, 3, 2, 4,
+    ];
+    expect(bytes.length).toBe(29);
+    const v3 = `FR3-${Buffer.from(bytes).toString('base64url')}`;
+    const back = decodeSeed(v3);
+    expect(back).not.toBeNull();
+    expect(back!.character.height).toBe(1.71);
+    expect(back!.bottomStyle).toBe('pants');
+    expect(back!.shoeStyle).toBe('pumps');
+    // the body did not exist in v3: it loads with spec defaults
+    expect(back!.character.shoulderWidth).toBe(DEFAULT_CHARACTER.shoulderWidth);
+    expect(back!.character.waist).toBe(DEFAULT_CHARACTER.waist);
+    expect(back!.character.hip).toBe(DEFAULT_CHARACTER.hip);
+    expect(back!.character.bust).toBe(DEFAULT_CHARACTER.bust);
+    expect(back!.character.build).toBe(DEFAULT_CHARACTER.build);
+  });
+});
+
+describe('adult safety restriction (CUS-0779, LEGAL-ETHICS J-02)', () => {
+  // Every youthward signal at its extreme at once: the shortest
+  // height, an undeveloped bust, a waist wider than the hips (a
+  // straight, undifferentiated line), the slightest build and the
+  // narrowest shoulders. No single one of these is a problem —
+  // the combination is what must never be generatable.
+  const CHILDLIKE = {
+    height: 1.45,
+    bust: 0.8,
+    waist: 1.22,
+    hip: 0.86,
+    build: 0.85,
+    shoulderWidth: 0.88,
+  };
+
+  it('scores the raw combination as fully youthward', () => {
+    expect(youthScore({ ...DEFAULT_CHARACTER, ...CHILDLIKE })).toBeCloseTo(1, 9);
+    expect(youthScore(DEFAULT_CHARACTER)).toBe(0);
+  });
+
+  it('leaves the default character untouched', () => {
+    expect(sanitizeCharacter({ ...DEFAULT_CHARACTER })).toEqual(DEFAULT_CHARACTER);
+  });
+
+  it('corrects the full minor-like combination back to the adult side', () => {
+    const out = sanitizeCharacter({ ...DEFAULT_CHARACTER, ...CHILDLIKE });
+    expect(youthScore(out)).toBeLessThanOrEqual(YOUTH_SCORE_MAX + 1e-9);
+    // The correction moves the secondary traits, visibly.
+    expect(out.bust).toBeGreaterThan(CHILDLIKE.bust);
+    expect(out.hip).toBeGreaterThan(CHILDLIKE.hip);
+    // Height is a legitimate adult trait: never corrected.
+    expect(out.height).toBe(CHILDLIKE.height);
+  });
+
+  it('corrects a milder minor-like combination too', () => {
+    const mild = {
+      height: 1.5,
+      bust: 0.85,
+      waist: 1.15,
+      hip: 0.9,
+      build: 0.88,
+      shoulderWidth: 0.9,
+    };
+    expect(youthScore({ ...DEFAULT_CHARACTER, ...mild })).toBeGreaterThan(YOUTH_SCORE_MAX);
+    const out = sanitizeCharacter({ ...DEFAULT_CHARACTER, ...mild });
+    expect(youthScore(out)).toBeLessThanOrEqual(YOUTH_SCORE_MAX + 1e-9);
+  });
+
+  it('leaves single youthward traits alone (short / flat / straight adults exist)', () => {
+    const shortOnly = { ...DEFAULT_CHARACTER, height: HEIGHT_MIN };
+    expect(sanitizeCharacter(shortOnly)).toEqual(shortOnly);
+    const flatTall = { ...DEFAULT_CHARACTER, bust: 0.8, height: 1.9 };
+    expect(sanitizeCharacter(flatTall)).toEqual(flatTall);
+    const straightTall = { ...DEFAULT_CHARACTER, waist: 1.22, hip: 0.86, height: 1.85, bust: 1.1 };
+    expect(sanitizeCharacter(straightTall)).toEqual(straightTall);
+  });
+
+  it('is idempotent: a corrected character passes through unchanged', () => {
+    const once = sanitizeCharacter({ ...DEFAULT_CHARACTER, ...CHILDLIKE });
+    expect(sanitizeCharacter(once)).toEqual(once);
+  });
+
+  it('clamps body parameters to their specs', () => {
+    const out = sanitizeCharacter({
+      ...DEFAULT_CHARACTER,
+      shoulderWidth: 9,
+      waist: 0,
+      hip: 9,
+      bust: 0,
+      build: 9,
+    });
+    expect(out.shoulderWidth).toBe(1.14);
+    expect(out.waist).toBe(0.82);
+    expect(out.hip).toBe(1.2);
+    expect(out.bust).toBe(0.8);
+    expect(out.build).toBe(1.2);
+  });
+
+  it('applies on the save path (sanitizeOutfit)', () => {
+    const out = sanitizeOutfit({ character: { ...DEFAULT_CHARACTER, ...CHILDLIKE } });
+    expect(youthScore(out.character)).toBeLessThanOrEqual(YOUTH_SCORE_MAX + 1e-9);
+    expect(out.character.bust).toBeGreaterThan(CHILDLIKE.bust);
+  });
+
+  it('applies on the seed path: a crafted v4 payload decodes corrected, never raw', () => {
+    // Hand-built v4 payload carrying the childlike combination in
+    // its body block (indices 29..33, quantized per the specs:
+    // shoulder 0 -> 0.88, waist 255 -> 1.22, hip 0 -> 0.86,
+    // bust 0 -> 0.80, build 0 -> 0.85) at height byte 0 -> 1.45 m.
+    const bytes = [
+      4, 71, 0, 2, 0, 0, ...new Array(13).fill(128), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0,
+    ];
+    expect(bytes.length).toBe(34);
+    const crafted = `FR4-${Buffer.from(bytes).toString('base64url')}`;
+    const back = decodeSeed(crafted);
+    expect(back).not.toBeNull();
+    expect(back!.character.height).toBe(1.45);
+    expect(youthScore(back!.character)).toBeLessThanOrEqual(YOUTH_SCORE_MAX + 1e-9);
+    expect(back!.character.bust).toBeGreaterThan(0.8);
   });
 });
 

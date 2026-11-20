@@ -8,7 +8,11 @@
 // phase-2 face parameters and the bottoms/shoes categories, the
 // chat step additionally drives those newer parameters through
 // the LLM path, proving the protocol really is generated from
-// the specs and catalogs. No real LLM or network is touched.
+// the specs and catalogs; the phase-3 body parameters joined it
+// the same way, and a final bridge step confirms the adult
+// safety restriction (CUS-0779) corrects a minor-like body
+// combination assembled command by command. No real LLM or
+// network is touched.
 // Run: xvfb-run -a electron tools/verify-llm.cjs [baseUrl] [stubBaseUrl]
 const { app, BrowserWindow } = require('electron');
 const fs = require('node:fs');
@@ -152,6 +156,7 @@ async function main() {
     `(() => {
        const o = window.__fittingRoom.getOutfit();
        return o.character.eyeSize === 1.2 && o.character.noseWidth === 1.3 &&
+         o.character.shoulderWidth === 1.1 && o.character.waist === 0.9 &&
          o.bottomStyle === 'pants' && o.bottomColor === '#44557a' &&
          o.shoeStyle === 'boots' && o.shoeColor === '#26262b' ? o : null;
      })()`,
@@ -194,8 +199,36 @@ async function main() {
          shoeStyle: r.outfit.shoeStyle,
          specHasSkinTone: spec.includes('"param":"skinTone"'),
          specHasFaceParam: spec.includes('"param":"eyeSize"'),
+         specHasBodyParam: spec.includes('"param":"shoulderWidth"'),
          specHasBottoms: spec.includes('set_bottom_style'),
          specHasShoes: spec.includes('set_shoe_style'),
+       };
+     })()`,
+  );
+
+  console.log('STEP 5B');
+  // 5b. the adult safety restriction (CUS-0779) holds on the
+  //     bridge path too: a command sequence assembling the full
+  //     minor-like body combination lands corrected, not raw —
+  //     the bust is raised and the height is left alone.
+  results.checks.bridgeSafety = await win.webContents.executeJavaScript(
+    `(() => {
+       const r = window.__fittingRoom.runCommands([
+         { type: 'set_character', param: 'height', value: 1.45 },
+         { type: 'set_character', param: 'bust', value: 0.8 },
+         { type: 'set_character', param: 'waist', value: 1.22 },
+         { type: 'set_character', param: 'hip', value: 0.86 },
+         { type: 'set_character', param: 'build', value: 0.85 },
+         { type: 'set_character', param: 'shoulderWidth', value: 0.88 },
+       ]);
+       const c = r.outfit.character;
+       return {
+         applied: r.applied.length,
+         height: c.height,
+         bust: c.bust,
+         hip: c.hip,
+         bustCorrected: c.bust > 0.8,
+         hipCorrected: c.hip > 0.86,
        };
      })()`,
   );

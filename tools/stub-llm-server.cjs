@@ -12,8 +12,9 @@
 //    (dress + navy + deeper skin tone + wave). If the user message
 //    contains "full", a second envelope exercises the categories
 //    added after the protocol was first written (phase-2 face
-//    parameters, bottoms, shoes) to prove they are commandable
-//    through the generated protocol. If it contains "bad", the
+//    parameters, bottoms, shoes, phase-3 body parameters) to
+//    prove they are commandable through the generated protocol.
+//    If it contains "bad", the
 //    envelope also emits an out-of-range value and an unknown
 //    command so the rejection path is exercised.
 const http = require('node:http');
@@ -62,6 +63,8 @@ const server = http.createServer((req, res) => {
         commands = [
           { type: 'set_character', param: 'eyeSize', value: 1.2 },
           { type: 'set_character', param: 'noseWidth', value: 1.3 },
+          { type: 'set_character', param: 'shoulderWidth', value: 1.1 },
+          { type: 'set_character', param: 'waist', value: 0.9 },
           { type: 'set_bottom_style', value: 'pants' },
           { type: 'set_bottom_color', value: '#44557a' },
           { type: 'set_shoe_style', value: 'boots' },

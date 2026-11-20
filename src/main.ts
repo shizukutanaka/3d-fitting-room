@@ -28,11 +28,13 @@ import {
   TOP_STYLES,
   loadOutfit,
   randomOutfit,
+  sanitizeOutfit,
   saveOutfit,
   type Outfit,
 } from './outfit';
 import { extractSeedFromPng } from './cardseed';
 import {
+  BODY_PARAM_KEYS,
   CHARACTER_PARAM_SPECS,
   EYE_COLORS,
   FACE_PARAM_KEYS,
@@ -41,6 +43,7 @@ import {
   HEIGHT_MAX,
   HEIGHT_MIN,
   fitzpatrickLabel,
+  sanitizeCharacter,
   type CharacterParams,
 } from './character';
 import { decodeSeed, encodeSeed } from './seed';
@@ -102,7 +105,11 @@ function el<K extends keyof HTMLElementTagNameMap>(
 }
 
 function update(next: Outfit): void {
-  outfit = next;
+  // Every state that lands in the app passes the sanitize gate —
+  // including the ones arriving through the verification/agent
+  // bridge — so the parameter ranges and the adult safety
+  // restriction (character.ts, CUS-0779) hold on every path.
+  outfit = sanitizeOutfit(next);
   rig.setCharacter(outfit.character);
   stage.setSubjectHeight(outfit.character.height);
   applyOutfit(rig, outfit);
@@ -112,9 +119,18 @@ function update(next: Outfit): void {
 
 /** Live character patch for sliders: applies and persists without
  *  re-rendering the panel, so the dragged slider is never destroyed
- *  mid-gesture. The seed readout (if visible) is refreshed in place. */
+ *  mid-gesture. The seed readout (if visible) is refreshed in place.
+ *  The patch passes through sanitizeCharacter like every other
+ *  path: if a slider drag completes a minor-like body combination,
+ *  the safety restriction corrects the *combination* (another
+ *  parameter moves), the avatar shows the corrected figure at
+ *  once, and the panel re-render on release shows the corrected
+ *  slider positions — the correction is never silent. */
 function patchCharacter(patch: Partial<CharacterParams>): void {
-  outfit = { ...outfit, character: { ...outfit.character, ...patch } };
+  outfit = {
+    ...outfit,
+    character: sanitizeCharacter({ ...outfit.character, ...patch }),
+  };
   rig.setCharacter(outfit.character);
   stage.setSubjectHeight(outfit.character.height);
   saveOutfit(outfit);
@@ -346,6 +362,30 @@ function renderOptions(): void {
     height.addEventListener('change', () => renderOptions());
     heightRow.append(el('span', 'slider-label', t('ui.height')), height, heightVal);
     nodes.push(heightRow);
+
+    // body: the phase-3 silhouette parameters (CHARACTER-SYSTEM.md
+    // §5.8 priority 4). Same spec-driven rows as the face; labels
+    // name shapes only — no gender wording (LEGAL-ETHICS.md
+    // judgment J-04). Garments re-fit automatically (items.ts).
+    // Combinations are fenced by the adult safety restriction in
+    // sanitizeCharacter (CUS-0779 / J-02): if a drag completes a
+    // minor-like combination, another slider's value is corrected
+    // and this panel re-renders with it on release.
+    nodes.push(el('span', 'group-label', t('ui.body')));
+    for (const param of BODY_PARAM_KEYS) {
+      const spec = CHARACTER_PARAM_SPECS[param];
+      if (spec.kind !== 'range') continue;
+      nodes.push(
+        rangeRow(
+          t(`body.${param}` as I18nKey),
+          c[param],
+          spec.min,
+          spec.max,
+          (v) => `${Math.round((v / spec.def) * 100)}%`,
+          (v) => patchCharacter({ [param]: v } as Partial<CharacterParams>),
+        ),
+      );
+    }
 
     nodes.push(el('span', 'group-label', t('ui.face')));
     for (const param of FACE_PARAM_KEYS) {

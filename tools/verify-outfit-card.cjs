@@ -144,7 +144,7 @@ async function main() {
   results.checks.seed = await win.webContents.executeJavaScript(
     `window.__fittingRoom.getSeed()`,
   );
-  results.checks.seedIsV3 = String(results.checks.seed).startsWith('FR3-');
+  results.checks.seedIsV4 = String(results.checks.seed).startsWith('FR4-');
 
   // 2. second look: pants + sneakers (proves the other bottom
   //    type renders, and differently)

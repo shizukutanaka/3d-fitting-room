@@ -18,7 +18,10 @@
 //   Still decodable; bottoms and shoes load with defaults.
 // - v3 ("FR3-", 29 bytes): appends bottom style/color and shoe
 //   style/color after the v2 layout, byte for byte.
-// Encoding always produces v3.
+// - v4 ("FR4-", 34 bytes): appends the 5 body parameters after
+//   the v3 layout, byte for byte. Still decodable in reverse:
+//   v1–v3 seeds load the body with defaults.
+// Encoding always produces v4.
 
 import {
   ACCESSORIES,
@@ -35,6 +38,7 @@ import {
   type Outfit,
 } from './outfit';
 import {
+  BODY_PARAM_KEYS,
   CHARACTER_PARAM_SPECS,
   EYE_COLORS,
   FACE_PARAM_KEYS,
@@ -47,9 +51,11 @@ import {
 const PREFIX_V1 = 'FR1-';
 const PREFIX_V2 = 'FR2-';
 const PREFIX_V3 = 'FR3-';
+const PREFIX_V4 = 'FR4-';
 const BYTE_COUNT_V1 = 12;
 const BYTE_COUNT_V2 = 25;
 const BYTE_COUNT_V3 = 29;
+const BYTE_COUNT_V4 = 34;
 
 function idx(options: readonly string[], value: string): number {
   const i = options.indexOf(value);
@@ -76,20 +82,20 @@ function base64UrlToBytes(text: string): number[] | null {
   }
 }
 
-type FaceKey = (typeof FACE_PARAM_KEYS)[number];
+type QuantKey = (typeof FACE_PARAM_KEYS)[number] | (typeof BODY_PARAM_KEYS)[number];
 
-function rangeOf(key: FaceKey): { min: number; max: number } {
+function rangeOf(key: QuantKey): { min: number; max: number } {
   const spec = CHARACTER_PARAM_SPECS[key];
-  if (spec.kind !== 'range') throw new Error(`face param ${key} is not a range`);
+  if (spec.kind !== 'range') throw new Error(`param ${key} is not a range`);
   return spec;
 }
 
-function quantizeFace(key: FaceKey, value: number): number {
+function quantizeRange(key: QuantKey, value: number): number {
   const { min, max } = rangeOf(key);
   return Math.round(((clamp(value, min, max) - min) / (max - min)) * 255);
 }
 
-function dequantizeFace(key: FaceKey, byte: number): number {
+function dequantizeRange(key: QuantKey, byte: number): number {
   const { min, max } = rangeOf(key);
   return min + (clamp(byte, 0, 255) / 255) * (max - min);
 }
@@ -97,13 +103,13 @@ function dequantizeFace(key: FaceKey, byte: number): number {
 export function encodeSeed(outfit: Outfit): string {
   const c = outfit.character;
   const bytes = [
-    3,
+    4,
     Math.round(clamp(c.skinTone, 0, 1) * 255),
     Math.round((clamp(c.height, HEIGHT_MIN, HEIGHT_MAX) - HEIGHT_MIN) * 100),
     idx(HAIR_COLORS, c.hairColor),
     idx(EYE_COLORS, c.eyeColor),
     idx(HAIR_STYLES, c.hairStyle),
-    ...FACE_PARAM_KEYS.map((key) => quantizeFace(key, c[key])),
+    ...FACE_PARAM_KEYS.map((key) => quantizeRange(key, c[key])),
     idx(TOP_STYLES, outfit.topStyle),
     idx(TOP_COLORS, outfit.topColor),
     idx(HATS, outfit.hat),
@@ -114,21 +120,27 @@ export function encodeSeed(outfit: Outfit): string {
     idx(BOTTOM_COLORS, outfit.bottomColor),
     idx(SHOE_STYLES, outfit.shoeStyle),
     idx(SHOE_COLORS, outfit.shoeColor),
+    ...BODY_PARAM_KEYS.map((key) => quantizeRange(key, c[key])),
   ];
-  return PREFIX_V3 + bytesToBase64Url(bytes);
+  return PREFIX_V4 + bytesToBase64Url(bytes);
 }
 
 /** Decode a seed back into a full state. Returns null for anything
  *  that is not a well-formed seed of a known version; the payload
  *  still passes through sanitizeOutfit, so even a hand-crafted
- *  byte string can only produce in-range values. A v1 seed yields
- *  the default face (its layout predates face parameters); v1 and
- *  v2 seeds yield the default bottoms and shoes (their layouts
- *  predate those categories). */
+ *  byte string can only produce in-range values — and the adult
+ *  safety restriction (CUS-0779) applies there too, so a crafted
+ *  v4 payload carrying a minor-like body combination decodes to
+ *  its corrected form, never to the combination itself. A v1
+ *  seed yields the default face (its layout predates face
+ *  parameters); v1 and v2 seeds yield the default bottoms and
+ *  shoes; v1–v3 seeds yield the default body (their layouts
+ *  predate the body parameters). */
 export function decodeSeed(seed: unknown): Outfit | null {
   if (typeof seed !== 'string') return null;
   let body = seed.trim();
-  if (body.startsWith(PREFIX_V3)) body = body.slice(PREFIX_V3.length);
+  if (body.startsWith(PREFIX_V4)) body = body.slice(PREFIX_V4.length);
+  else if (body.startsWith(PREFIX_V3)) body = body.slice(PREFIX_V3.length);
   else if (body.startsWith(PREFIX_V2)) body = body.slice(PREFIX_V2.length);
   else if (body.startsWith(PREFIX_V1)) body = body.slice(PREFIX_V1.length);
   const bytes = base64UrlToBytes(body);
@@ -156,12 +168,22 @@ export function decodeSeed(seed: unknown): Outfit | null {
   }
   if (
     (bytes[0] === 2 && bytes.length === BYTE_COUNT_V2) ||
-    (bytes[0] === 3 && bytes.length === BYTE_COUNT_V3)
+    (bytes[0] === 3 && bytes.length === BYTE_COUNT_V3) ||
+    (bytes[0] === 4 && bytes.length === BYTE_COUNT_V4)
   ) {
     const face: Record<string, number> = {};
     FACE_PARAM_KEYS.forEach((key, i) => {
-      face[key] = dequantizeFace(key, bytes[6 + i]);
+      face[key] = dequantizeRange(key, bytes[6 + i]);
     });
+    // v4 appends the body block after the v3 layout; for v2/v3
+    // these keys are absent and sanitizeCharacter fills the
+    // defaults (the pre-phase-3 body).
+    const bodyParams: Record<string, number> = {};
+    if (bytes[0] === 4) {
+      BODY_PARAM_KEYS.forEach((key, i) => {
+        bodyParams[key] = dequantizeRange(key, bytes[29 + i]);
+      });
+    }
     return sanitizeOutfit({
       topStyle: at(TOP_STYLES, 19),
       topColor: at(TOP_COLORS, 20),
@@ -172,7 +194,7 @@ export function decodeSeed(seed: unknown): Outfit | null {
       // v3 appends the bottoms/shoes block after the v2 layout;
       // for v2 these keys are absent and sanitizeOutfit fills the
       // defaults (no bottoms, the original flats).
-      ...(bytes[0] === 3
+      ...(bytes[0] >= 3
         ? {
             bottomStyle: at(BOTTOM_STYLES, 25),
             bottomColor: at(BOTTOM_COLORS, 26),
@@ -189,6 +211,7 @@ export function decodeSeed(seed: unknown): Outfit | null {
         eyeColor: at(EYE_COLORS, 4),
         hairStyle: at(HAIR_STYLES, 5),
         ...face,
+        ...bodyParams,
       },
     });
   }

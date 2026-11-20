@@ -4,8 +4,9 @@
 // materials (see textures.ts).
 //
 // The avatar is generated from a CharacterParams vector (see
-// character.ts): skin/hair/eye colors, hairstyle, height and the
-// phase-2 face parameters are parameters, not constants. Height is
+// character.ts): skin/hair/eye colors, hairstyle, height, the
+// phase-2 face parameters and the phase-3 body parameters are
+// parameters, not constants. Height is
 // applied at generation time as a frame scale — full strength
 // vertically, damped across the width so a taller person is not
 // simply a wider one — and setCharacter() regenerates the affected
@@ -25,6 +26,8 @@ import { fabricTextures, hairTextures, skinTextures } from './textures';
 import type { PoseId } from './outfit';
 import {
   BASE_HEIGHT,
+  bodyRadiusFactor,
+  legGirthFactor,
   skinColorForTone,
   type CharacterParams,
   type HairStyleId,
@@ -100,6 +103,26 @@ const SKULL_PROFILE: Array<[number, number]> = [
   [0.062, 0.205],
   [0.036, 0.232],
   [0.001, 0.244],
+];
+
+// Torso profile (radius, absolute frame height) at the default
+// body parameters. buildBody() scales each radius by
+// bodyRadiusFactor(y, character) — at the defaults the factor is
+// exactly 1 everywhere and this is the body the avatar shipped
+// with. items.ts mirrors these points (plus its ~11 mm clothing
+// offset) through the same factor, which is what makes garments
+// auto-fit a changed body.
+const TORSO_PROFILE: Array<[number, number]> = [
+  [0.138, 0.845],
+  [0.145, 0.88],
+  [0.14, 0.94],
+  [0.12, 1.02],
+  [0.121, 1.08],
+  [0.146, 1.17],
+  [0.141, 1.25],
+  [0.117, 1.335],
+  [0.075, 1.39],
+  [0.05, 1.415],
 ];
 
 /** A hairstyle as a head-local group: a lathe shell that follows
@@ -332,53 +355,68 @@ export function buildAvatar(character: CharacterParams): AvatarRig {
   const frame = new THREE.Group();
   root.add(frame);
 
-  // ---- legs ----
-  // The legs end at the ankle cylinder; footwear is an outfit
-  // item (items.ts buildShoes) placed into shoesAnchor, so there
-  // is no bare-foot geometry and no shoe baked into the body.
-  for (const side of [-1, 1]) {
-    const x = side * 0.096;
-    frame.add(mesh(new THREE.CapsuleGeometry(0.067, 0.25, 6, 20), skin, x, 0.645, 0));
-    frame.add(mesh(new THREE.SphereGeometry(0.047, 20, 14), skin, x, 0.462, 0.004));
-    frame.add(mesh(new THREE.CapsuleGeometry(0.043, 0.26, 6, 18), skin, x, 0.278, 0));
-    frame.add(mesh(new THREE.CylinderGeometry(0.031, 0.034, 0.1, 14), skin, x, 0.075, 0));
+  // ---- body (legs, pelvis, torso, neck) ----
+  // The whole body below the head is generated from the character
+  // vector: the torso is a lathe whose profile radii pass through
+  // bodyRadiusFactor() (character.ts), the pelvis and legs scale
+  // with hip/build, and the neck with build. At the default
+  // parameters every factor is 1 and the body is the original
+  // fixed one. The group is rebuilt by applyBody() whenever a
+  // body parameter changes (setCharacter) — the same regeneration
+  // pattern the hair uses for faceWidth. The legs end at the
+  // ankle cylinder; footwear is an outfit item (items.ts
+  // buildShoes) placed into shoesAnchor, so there is no bare-foot
+  // geometry and no shoe baked into the body. Feet stay planted
+  // at x=±0.096 at every body setting: hip width widens the
+  // pelvis and thighs, never the stance, so shoes never drift.
+  function buildBody(c: CharacterParams): THREE.Group {
+    const g = new THREE.Group();
+    const legF = 1 + (c.build - 1) * 0.7;
+    const thighF = legGirthFactor(c);
+    const ankleF = 1 + (c.build - 1) * 0.35;
+    for (const side of [-1, 1]) {
+      const x = side * 0.096;
+      g.add(mesh(new THREE.CapsuleGeometry(0.067 * thighF, 0.25, 6, 20), skin, x, 0.645, 0));
+      g.add(mesh(new THREE.SphereGeometry(0.047 * legF, 20, 14), skin, x, 0.462, 0.004));
+      g.add(mesh(new THREE.CapsuleGeometry(0.043 * legF, 0.26, 6, 18), skin, x, 0.278, 0));
+      g.add(
+        mesh(new THREE.CylinderGeometry(0.031 * ankleF, 0.034 * ankleF, 0.1, 14), skin, x, 0.075, 0),
+      );
+    }
+    // pelvis (base-layer shorts)
+    const buildHalf = 1 + (c.build - 1) * 0.4;
+    const pelvis = mesh(new THREE.SphereGeometry(1, 36, 24), baseFabric, 0, 0.885, 0);
+    pelvis.scale.set(
+      0.163 * c.hip * buildHalf,
+      0.115 * (1 + (c.build - 1) * 0.15),
+      0.128 * (1 + (c.hip - 1) * 0.65) * buildHalf,
+    );
+    g.add(pelvis);
+    for (const side of [-1, 1]) {
+      g.add(
+        mesh(new THREE.CylinderGeometry(0.078 * thighF, 0.07 * thighF, 0.13, 20), baseFabric, side * 0.096, 0.8, 0),
+      );
+    }
+    // torso (base camisole; outfit overlays wrap this)
+    const torso = latheFromProfile(
+      TORSO_PROFILE.map(([r, y]): [number, number] => [r * bodyRadiusFactor(y, c), y]),
+      baseFabric,
+    );
+    torso.scale.set(1, 1, 0.8);
+    g.add(torso);
+    const neckF = 1 + (c.build - 1) * 0.4;
+    g.add(mesh(new THREE.CylinderGeometry(0.042 * neckF, 0.05 * neckF, 0.15, 20), skin, 0, 1.465, 0));
+    return g;
   }
+  let bodyGroup = buildBody(character);
+  frame.add(bodyGroup);
+
   const shoesAnchor = new THREE.Group();
   frame.add(shoesAnchor);
 
   const bottomAnchor = new THREE.Group();
   bottomAnchor.position.set(0, 0.95, 0);
   frame.add(bottomAnchor);
-
-  // ---- pelvis (base-layer shorts) ----
-  const pelvis = mesh(new THREE.SphereGeometry(1, 36, 24), baseFabric, 0, 0.885, 0);
-  pelvis.scale.set(0.163, 0.115, 0.128);
-  frame.add(pelvis);
-  for (const side of [-1, 1]) {
-    frame.add(
-      mesh(new THREE.CylinderGeometry(0.078, 0.07, 0.13, 20), baseFabric, side * 0.096, 0.8, 0),
-    );
-  }
-
-  // ---- torso (base camisole; outfit overlays wrap this) ----
-  const torso = latheFromProfile(
-    [
-      [0.138, 0.845],
-      [0.145, 0.88],
-      [0.14, 0.94],
-      [0.12, 1.02],
-      [0.121, 1.08],
-      [0.146, 1.17],
-      [0.141, 1.25],
-      [0.117, 1.335],
-      [0.075, 1.39],
-      [0.05, 1.415],
-    ],
-    baseFabric,
-  );
-  torso.scale.set(1, 1, 0.8);
-  frame.add(torso);
-  frame.add(mesh(new THREE.CylinderGeometry(0.042, 0.05, 0.15, 20), skin, 0, 1.465, 0));
 
   const torsoAnchor = new THREE.Group();
   torsoAnchor.position.set(0, 1.12, 0);
@@ -393,17 +431,31 @@ export function buildAvatar(character: CharacterParams): AvatarRig {
   frame.add(bagAnchor);
 
   // ---- arms ----
-  function buildArm(side: -1 | 1): { shoulder: THREE.Group; elbow: THREE.Group } {
+  // The shoulder groups are posed by the pose system; their
+  // placement and the arm meshes' girth are body-parameter driven
+  // (poseArms below), so buildArm keeps references to the parts
+  // that scale.
+  interface ArmParts {
+    side: -1 | 1;
+    shoulder: THREE.Group;
+    elbow: THREE.Group;
+    sleeve: THREE.Mesh;
+    upper: THREE.Mesh;
+    fore: THREE.Mesh;
+  }
+  function buildArm(side: -1 | 1): ArmParts {
     const shoulder = new THREE.Group();
     shoulder.position.set(side * 0.172, 1.374, 0);
     shoulder.add(mesh(new THREE.SphereGeometry(0.052, 20, 14), skin, 0, 0.002, 0));
     // 3/4 sleeve in the shared top material, so sleeves always match
     const sleeve = mesh(new THREE.CylinderGeometry(0.054, 0.045, 0.22, 20), topMaterial, 0, -0.09, 0);
     shoulder.add(sleeve);
-    shoulder.add(mesh(new THREE.CapsuleGeometry(0.04, 0.16, 6, 16), skin, 0, -0.16, 0));
+    const upper = mesh(new THREE.CapsuleGeometry(0.04, 0.16, 6, 16), skin, 0, -0.16, 0);
+    shoulder.add(upper);
     const elbow = new THREE.Group();
     elbow.position.set(0, -0.27, 0);
-    elbow.add(mesh(new THREE.CapsuleGeometry(0.034, 0.17, 6, 16), skin, 0, -0.115, 0));
+    const fore = mesh(new THREE.CapsuleGeometry(0.034, 0.17, 6, 16), skin, 0, -0.115, 0);
+    elbow.add(fore);
     const hand = new THREE.Group();
     hand.position.set(0, -0.26, 0);
     const palm = mesh(new THREE.SphereGeometry(1, 16, 12), skin, 0, -0.032, 0);
@@ -413,10 +465,38 @@ export function buildAvatar(character: CharacterParams): AvatarRig {
     elbow.add(hand);
     shoulder.add(elbow);
     frame.add(shoulder);
-    return { shoulder, elbow };
+    return { side, shoulder, elbow, sleeve, upper, fore };
   }
   const armL = buildArm(-1);
   const armR = buildArm(1);
+
+  // Shoulder placement follows shoulderWidth (with a build
+  // contribution), arm girth follows build. The shoulder *joint*
+  // sphere and the hands are not scaled: hands changing size with
+  // a girth slider reads as a different creature, not a build.
+  function poseArms(c: CharacterParams): void {
+    const radial = 1 + (c.build - 1) * 0.7;
+    for (const arm of [armL, armR]) {
+      arm.shoulder.position.x =
+        arm.side * 0.172 * c.shoulderWidth * (1 + (c.build - 1) * 0.25);
+      arm.sleeve.scale.set(radial, 1, radial);
+      arm.upper.scale.set(radial, 1, radial);
+      arm.fore.scale.set(radial, 1, radial);
+    }
+  }
+  poseArms(character);
+
+  /** Regenerate the body group and re-place the arms for a new
+   *  body-parameter set (called by setCharacter on change). */
+  function applyBody(next: CharacterParams): void {
+    frame.remove(bodyGroup);
+    bodyGroup.traverse((obj) => {
+      if (obj instanceof THREE.Mesh) obj.geometry.dispose();
+    });
+    bodyGroup = buildBody(next);
+    frame.add(bodyGroup);
+    poseArms(next);
+  }
 
   // ---- head ----
   // Feature depths below are computed against the scaled skull
@@ -600,6 +680,15 @@ export function buildAvatar(character: CharacterParams): AvatarRig {
       });
       hairGroup = buildHair(next.hairStyle, hairMat, next.faceWidth);
       head.add(hairGroup);
+    }
+    if (
+      next.shoulderWidth !== current.shoulderWidth ||
+      next.waist !== current.waist ||
+      next.hip !== current.hip ||
+      next.bust !== current.bust ||
+      next.build !== current.build
+    ) {
+      applyBody(next);
     }
     if (next.height !== current.height) applyHeight(next.height);
     current = { ...next };
