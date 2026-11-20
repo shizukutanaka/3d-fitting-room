@@ -33,6 +33,7 @@ import {
   type Outfit,
 } from './outfit';
 import { extractSeedFromPng } from './cardseed';
+import { exportGlb, exportVrm, type ExportedFile } from './export3d';
 import {
   BODY_PARAM_KEYS,
   CHARACTER_PARAM_SPECS,
@@ -524,6 +525,19 @@ function renderOptions(): void {
     const cardRow = el('div', 'seed-row');
     cardRow.append(chip(t('ui.cardLoad'), false, () => cardFileInput.click()));
     nodes.push(cardRow);
+    // The 3D-file export lives here, with the other "person as a
+    // file" machinery: a T-posed, boned, self-describing file
+    // (glTF or VRM) whose honest positioning is stated in the
+    // note (docs/DESIGN.md §17).
+    nodes.push(el('span', 'group-label', t('ui.export3d')));
+    nodes.push(el('p', 'llm-note', t('export.note')));
+    const exportRow = el('div', 'seed-row');
+    const glbBtn = chip(t('ui.exportGlb'), false, () => downloadExport('glb'));
+    glbBtn.id = 'btn-export-glb';
+    const vrmBtn = chip(t('ui.exportVrm'), false, () => downloadExport('vrm'));
+    vrmBtn.id = 'btn-export-vrm';
+    exportRow.append(glbBtn, vrmBtn);
+    nodes.push(exportRow);
 
     // genetics: synthesize a new person from two people's seeds
     // (see the module-state block above). The result is presented
@@ -833,6 +847,24 @@ async function exportPhoto(): Promise<void> {
 document.getElementById('btn-photo')!.addEventListener('click', () => {
   void exportPhoto();
 });
+
+// ---- 3D file export (glTF / VRM) ----
+// The person + outfit as a portable file that opens outside this
+// app (export3d.ts): built entirely on-device from a throwaway
+// T-posed rig, with the seed and the named-parameter JSON inside
+// the file, so the file describes itself wherever it travels.
+function export3dFile(format: 'glb' | 'vrm'): ExportedFile {
+  return format === 'vrm' ? exportVrm(outfit) : exportGlb(outfit);
+}
+
+function downloadExport(format: 'glb' | 'vrm'): void {
+  const { bytes } = export3dFile(format);
+  downloadBlob(
+    new Blob([bytes.buffer as ArrayBuffer], { type: 'model/gltf-binary' }),
+    `fitting-room-character.${format}`,
+  );
+  showToast(t('ui.exported'));
+}
 document.getElementById('btn-random')!.addEventListener('click', () => {
   // Randomize the outfit, not the person.
   update({ ...randomOutfit(), character: outfit.character });
@@ -892,6 +924,10 @@ interface FittingRoomBridge {
   getSeed(): string;
   setSeed(seed: string): boolean;
   cardDataURL(): Promise<string>;
+  /** Export the current person + outfit as a 3D file ('glb' or
+   *  'vrm'): the bytes as a base64 data URL, plus the part count
+   *  and the seed the file carries in its extras (export3d.ts). */
+  export3dInfo(format: 'glb' | 'vrm'): { dataUrl: string; parts: number; bytes: number; seed: string };
   /** Restore the person from a share-card PNG given as a data
    *  URL — the same code path as dropping the file on the window.
    *  Resolves true when a seed was found and applied. */
@@ -943,6 +979,20 @@ const bridge: FittingRoomBridge = {
     };
   },
   commandSpec: () => describeCommandProtocol(),
+  export3dInfo: (format) => {
+    const { bytes, parts, seed } = export3dFile(format);
+    let bin = '';
+    const CHUNK = 0x8000;
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+    }
+    return {
+      dataUrl: `data:model/gltf-binary;base64,${btoa(bin)}`,
+      parts,
+      bytes: bytes.length,
+      seed,
+    };
+  },
   cardDataURL: async () => {
     stage.renderer.render(stage.scene, stage.camera);
     const blob = await composeShareCard(canvas, {

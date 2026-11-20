@@ -68,12 +68,27 @@ describe('no money; data goes only to the user-configured endpoint', () => {
     // example (an input placeholder showing the shape of a local
     // server address). A real remote endpoint in the code would
     // mean the product phones somewhere by default — banned.
+    //
+    // One deliberate exception, added 2026-11-20 under mi's
+    // direction to state usage terms in exported files'
+    // metadata (docs/DESIGN.md §17, docs/PERSPECTIVES.md
+    // viewpoint 4): the CC0 1.0 deed URL in src/export3d.ts. It
+    // is not an endpoint — the app never fetches it; it is text
+    // written into the VRM/GLB files the user exports, where the
+    // VRMC_vrm spec requires a licenseUrl and CC0's terms are
+    // exactly the mandated ones (free use as material). The
+    // exception is this one URL in this one file; anything else
+    // still fails.
+    const LICENSE_URL = 'https://creativecommons.org/publicdomain/zero/1.0/';
+    const isExportModule = (f: string) => f.endsWith(join('src', 'export3d.ts'));
     const urlPattern = /https?:\/\/[^\s"'`)<\]]+/g;
     for (const [file, text] of texts) {
       if (isSw(file)) continue;
       for (const match of text.match(urlPattern) ?? []) {
         expect(
-          match.startsWith('http://localhost') || match.startsWith('http://127.0.0.1'),
+          match.startsWith('http://localhost') ||
+            match.startsWith('http://127.0.0.1') ||
+            (isExportModule(file) && match === LICENSE_URL),
           `${file} contains a non-loopback URL literal: ${match}`,
         ).toBe(true);
       }

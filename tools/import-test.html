@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<!-- Round-trip check page for tools/verify-export.cjs: loads a GLB
+     with three.js GLTFLoader in a fresh scene that shares nothing
+     with the app (its own renderer, camera and lights), renders it,
+     and reports the structure it found on window.__importResult.
+     Not part of the shipped app — a verification fixture only.
+     Serve the repository root (e.g. python3 -m http.server) so the
+     import map below resolves three from node_modules. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GLB import test</title>
+<style>html, body { margin: 0; background: #241f1c; }</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "/node_modules/three/build/three.module.js",
+    "three/addons/": "/node_modules/three/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="gl" width="900" height="800"></canvas>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const result = { errors: [] };
+window.__importResult = result;
+
+try {
+  const url = new URLSearchParams(location.search).get('file');
+  if (!url) throw new Error('missing ?file=');
+
+  // Read the seed straight out of the GLB JSON chunk, independent
+  // of the loader, so the check covers the file format itself.
+  const raw = await (await fetch(url)).arrayBuffer();
+  const dv = new DataView(raw);
+  if (dv.getUint32(0, true) !== 0x46546c67) throw new Error('bad GLB magic');
+  const jsonLength = dv.getUint32(12, true);
+  const gltfJson = JSON.parse(
+    new TextDecoder().decode(new Uint8Array(raw, 20, jsonLength)),
+  );
+  result.seed = gltfJson.extras?.fittingRoomSeed ?? null;
+  result.generator = gltfJson.asset?.generator ?? null;
+  result.skinJoints = gltfJson.skins?.[0]?.joints?.length ?? 0;
+  result.hasVrm = Boolean(gltfJson.extensions?.VRMC_vrm);
+  result.paramsHeight = gltfJson.extras?.fittingRoomParams?.character?.height ?? null;
+
+  const canvas = document.getElementById('gl');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+  renderer.setSize(900, 800, false);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.1;
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color('#241f1c');
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  scene.environmentIntensity = 0.6;
+  const key = new THREE.DirectionalLight('#fff1dd', 1.6);
+  key.position.set(2, 3, 3);
+  scene.add(key);
+
+  const gltf = await new GLTFLoader().loadAsync(url);
+  scene.add(gltf.scene);
+
+  const names = [];
+  let meshes = 0;
+  let nodes = 0;
+  gltf.scene.traverse((obj) => {
+    nodes++;
+    if (obj.isMesh) {
+      meshes++;
+      names.push(obj.name);
+    }
+  });
+  const box = new THREE.Box3().setFromObject(gltf.scene);
+  result.nodes = nodes;
+  result.meshes = meshes;
+  result.names = names;
+  result.bboxMin = box.min.toArray();
+  result.bboxMax = box.max.toArray();
+  result.height = box.max.y - box.min.y;
+
+  const center = box.getCenter(new THREE.Vector3());
+  const camera = new THREE.PerspectiveCamera(40, 900 / 800, 0.1, 60);
+  camera.position.set(center.x + result.height * 0.35, center.y + result.height * 0.08, center.z + result.height * 1.85);
+  camera.lookAt(center.x, center.y, center.z);
+  renderer.render(scene, camera);
+  result.rendered = true;
+} catch (err) {
+  result.errors.push(String(err && err.message ? err.message : err));
+}
+window.__importReady = true;
+</script>
+</body>
+</html>
