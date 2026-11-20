@@ -50,6 +50,16 @@ import {
 import { decodeSeed, encodeSeed } from './seed';
 import { synthesizeCharacter } from './genetics';
 import {
+  MUTATION_STRENGTHS,
+  mutationCandidates,
+  type MutationStrength,
+} from './mutation';
+import {
+  loadMutationHistory,
+  recordMutation,
+  type MutationHistoryEvent,
+} from './mutation-history';
+import {
   isValidEndpoint,
   loadLlmSettings,
   requestCommands,
@@ -123,8 +133,14 @@ function update(next: Outfit): void {
   // restriction (character.ts, CUS-0779) hold on every path.
   // A committed change also ends any genetics preview: the view
   // is re-rendered from the new state below, so a previewed
-  // person must not linger as if still on offer.
+  // person must not linger as if still on offer. The same holds
+  // for a mutation preview, and for the restored-person notice:
+  // once the state moves on, the "you just received this person"
+  // moment is over.
   blendChild = null;
+  mutationCands = null;
+  mutationSelected = null;
+  restoredNotice = false;
   outfit = sanitizeOutfit(next);
   rig.setCharacter(outfit.character);
   stage.setSubjectHeight(outfit.character.height);
@@ -146,8 +162,14 @@ function patchCharacter(patch: Partial<CharacterParams>): void {
   // A slider edit likewise ends a genetics preview (the rig is
   // re-rendered from the current person below). The preview block
   // disappears at the next panel render; its apply button checks
-  // blendChild before doing anything.
+  // blendChild before doing anything. Mutation previews and the
+  // restored-person notice end the same way: a hand on a slider
+  // means the person is being edited now, not received or
+  // previewed.
   blendChild = null;
+  mutationCands = null;
+  mutationSelected = null;
+  restoredNotice = false;
   outfit = {
     ...outfit,
     character: sanitizeCharacter({ ...outfit.character, ...patch }),
@@ -226,6 +248,140 @@ function onBlendGenerate(): void {
   showCharacterPreview(blendChild);
   showToast(t('genetics.created'));
   renderOptions();
+}
+
+// ---- mutation: one-parent variation, offered as candidates ----
+// (docs/PERSPECTIVES.md viewpoint 3, in the corrected form of
+// docs/PERSPECTIVES-2.md R2-2/R2-4.) The current person is
+// varied into four nearby-but-different people; each candidate
+// is shown as a still captured from the stage, the picked one
+// is previewed on the rig, and only "use this person" commits
+// it — through update() and its sanitize gate, like every other
+// path. An adopted candidate is a *new* person: they start
+// unnamed (in this branch the outfit carries no name yet; when
+// the identity foundation lands, adoption must also clear the
+// name — see DESIGN.md §19.3), and where they came from is
+// recorded only in the on-device history (mutation-history.ts),
+// never in their seed or any other artifact.
+let mutationStrength: MutationStrength = 'standard';
+let mutationCands: {
+  list: CharacterParams[];
+  thumbs: string[];
+  /** The strength this shelf was rolled at (the picker may
+   *  have moved on since; the lineage record names the roll,
+   *  not the picker). */
+  strength: MutationStrength;
+} | null = null;
+let mutationSelected: number | null = null;
+
+/** Capture a small still of a person from the live stage: show
+ *  them, render one frame, and read the canvas back (the same
+ *  readback the share card uses). The captures for a candidate
+ *  shelf happen inside one synchronous block, so the stage is
+ *  never painted mid-shelf — the viewer sees only the person
+ *  who was on stage before, and after. */
+function captureStill(c: CharacterParams): string {
+  showCharacterPreview(c);
+  stage.renderer.render(stage.scene, stage.camera);
+  const size = 200;
+  const tmp = document.createElement('canvas');
+  tmp.width = size;
+  tmp.height = size;
+  const ctx = tmp.getContext('2d');
+  if (!ctx) return '';
+  const side = Math.min(canvas.width, canvas.height);
+  ctx.drawImage(
+    canvas,
+    (canvas.width - side) / 2,
+    (canvas.height - side) / 2,
+    side,
+    side,
+    0,
+    0,
+    size,
+    size,
+  );
+  return tmp.toDataURL('image/jpeg', 0.85);
+}
+
+function onMutationGenerate(): void {
+  // A fresh base seed per press: re-rolling is the fun of it.
+  // The shelf itself is deterministic in the base seed, and an
+  // adopted candidate is fully captured by their own seed.
+  const baseSeed = Math.floor(Math.random() * 0x100000000) >>> 0;
+  const list = mutationCandidates(outfit.character, baseSeed, mutationStrength);
+  const thumbs = list.map((c) => captureStill(c));
+  mutationCands = { list, thumbs, strength: mutationStrength };
+  mutationSelected = null;
+  // Capturing walked the rig through the candidates; put the
+  // current person back on stage.
+  showCharacterPreview(outfit.character);
+  stage.renderer.render(stage.scene, stage.camera);
+  showToast(t('mutation.created'));
+  renderOptions();
+}
+
+function onMutationSelect(index: number): void {
+  if (!mutationCands || !mutationCands.list[index]) return;
+  mutationSelected = index;
+  showCharacterPreview(mutationCands.list[index]);
+  renderOptions();
+}
+
+function onMutationApply(): void {
+  if (!mutationCands || mutationSelected === null) return;
+  const candidate = mutationCands.list[mutationSelected];
+  // Record the lineage before the state moves: the source is
+  // the person on stage now, the result is the adopted
+  // candidate. The record stays on this device
+  // (mutation-history.ts) — the candidate's own seed carries
+  // nothing about where they came from.
+  // INTEGRATION (identity foundation): the adopted person must
+  // also start unnamed — clear Outfit.name here when it exists
+  // (DESIGN.md §19.3).
+  recordMutation(
+    encodeSeed(outfit),
+    encodeSeed({ ...outfit, character: candidate }),
+    mutationCands.strength,
+  );
+  update({ ...outfit, character: candidate });
+  showToast(t('mutation.applied'));
+}
+
+function onMutationCancel(): void {
+  mutationSelected = null;
+  showCharacterPreview(outfit.character);
+  renderOptions();
+}
+
+// ---- the receiver's first action (PERSPECTIVES-2.md R2-4) ----
+// Set when a person has just been restored from a share card or
+// a pasted seed. The receiver's real motive is projection —
+// "I want a person of my own" — so the prominent offer on the
+// restored screen is not "edit this person" but "make your own
+// person from this template": the restored parameters become
+// the starting point, and the first thing offered is a shelf of
+// variations of them. The ordinary editing path stays exactly
+// where it was; only the primary/secondary order changes. The
+// notice ends at the first committed change (update() and
+// patchCharacter() clear it), or when the receiver dismisses
+// it ("keep this person").
+let restoredNotice = false;
+
+function onMakeMine(): void {
+  restoredNotice = false;
+  activeTab = 'character';
+  renderTabs();
+  // The restored person stays on stage as the template; the
+  // variations are rolled at the standard strength so the
+  // receiver immediately sees what *their* version could look
+  // like.
+  // INTEGRATION (identity foundation): the copy the receiver
+  // makes is theirs — clear Outfit.name here when it exists,
+  // so the original author's anchor does not travel with the
+  // template (DESIGN.md §19.3).
+  mutationStrength = 'standard';
+  onMutationGenerate();
 }
 
 function readSettingsForm(): LlmSettings {
@@ -482,6 +638,30 @@ function renderOptions(): void {
   const nodes: HTMLElement[] = [];
   const key = (prefix: string, id: string) => `${prefix}.${id}` as I18nKey;
 
+  // The restored-person notice sits above every tab's content:
+  // the moment right after a restore is the receiver's entry
+  // point (PERSPECTIVES.md viewpoint 2), and its primary action
+  // is "make my own person from this template" (PERSPECTIVES-2
+  // R2-4) — not editing the received person, which remains
+  // available everywhere it always was.
+  if (restoredNotice) {
+    const block = el('div', 'restored-block');
+    block.id = 'restored-notice';
+    block.append(el('p', 'restored-note', t('restore.note')));
+    const row = el('div', 'seed-row');
+    const makeBtn = chip(t('restore.makeMine'), false, onMakeMine);
+    makeBtn.id = 'btn-make-mine';
+    makeBtn.classList.add('primary');
+    const dismissBtn = chip(t('restore.dismiss'), false, () => {
+      restoredNotice = false;
+      renderOptions();
+    });
+    dismissBtn.id = 'btn-restore-dismiss';
+    row.append(makeBtn, dismissBtn);
+    block.append(row);
+    nodes.push(block);
+  }
+
   if (activeTab === 'character') {
     const c = outfit.character;
     // skin tone: continuous Fitzpatrick slider (label shows the
@@ -676,8 +856,14 @@ function renderOptions(): void {
     seedInput.setAttribute('aria-label', t('ui.seed'));
     const applyBtn = chip(t('ui.seedApply'), false, () => {
       const decoded = decodeSeed(seedInput.value);
-      if (decoded) update(decoded);
-      else showToast(t('ui.seedInvalid'));
+      if (decoded) {
+        update(decoded);
+        // A pasted seed is the same receiver moment as a card
+        // restore (R2-4): offer "make your own from this
+        // template" first.
+        restoredNotice = true;
+        renderOptions();
+      } else showToast(t('ui.seedInvalid'));
     });
     applyRow.append(seedInput, applyBtn);
     nodes.push(applyRow);
@@ -771,6 +957,68 @@ function renderOptions(): void {
       cancelBtn.id = 'blend-cancel';
       actRow.append(applyBtn, cancelBtn);
       nodes.push(actRow);
+    }
+
+    // mutation: one-parent variations of the current person
+    // (see the module-state block above). The strength is picked
+    // first, then a shelf of four candidates is rolled; each
+    // candidate is a still captured from the stage, picking one
+    // previews it, and adopting it starts a new person.
+    nodes.push(el('span', 'group-label', t('mutation.title')));
+    nodes.push(el('p', 'llm-note', t('mutation.note')));
+    const strengthRow = el('div', 'seed-row');
+    for (const s of MUTATION_STRENGTHS) {
+      const b = chip(t(`mutation.${s}` as I18nKey), mutationStrength === s, () => {
+        mutationStrength = s;
+        renderOptions();
+      });
+      b.id = `mutation-strength-${s}`;
+      strengthRow.append(b);
+    }
+    nodes.push(strengthRow);
+    const mutGenRow = el('div', 'seed-row');
+    const mutGenBtn = chip(t('mutation.generate'), false, onMutationGenerate);
+    mutGenBtn.id = 'mutation-generate';
+    mutGenRow.append(mutGenBtn);
+    nodes.push(mutGenRow);
+    if (mutationCands) {
+      nodes.push(el('span', 'group-label', t('mutation.candidates')));
+      const thumbsRow = el('div', 'mutation-thumbs');
+      mutationCands.list.forEach((candidate, i) => {
+        const b = el('button', 'mutation-thumb') as HTMLButtonElement;
+        b.type = 'button';
+        b.id = `mutation-candidate-${i}`;
+        b.setAttribute('aria-pressed', String(mutationSelected === i));
+        b.setAttribute('aria-label', `${t('mutation.candidates')} ${i + 1}`);
+        const img = el('img');
+        img.src = mutationCands!.thumbs[i];
+        img.alt = '';
+        b.append(img);
+        b.addEventListener('click', () => onMutationSelect(i));
+        thumbsRow.append(b);
+      });
+      nodes.push(thumbsRow);
+      if (mutationSelected !== null) {
+        const candSeedRow = el('div', 'seed-row');
+        const candSeedVal = el(
+          'code',
+          'seed-value',
+          encodeSeed({
+            ...outfit,
+            character: mutationCands.list[mutationSelected],
+          }),
+        );
+        candSeedVal.id = 'mutation-candidate-seed';
+        candSeedRow.append(candSeedVal);
+        nodes.push(candSeedRow);
+        const actRow = el('div', 'seed-row');
+        const applyBtn = chip(t('mutation.apply'), false, onMutationApply);
+        applyBtn.id = 'mutation-apply';
+        const cancelBtn = chip(t('mutation.cancel'), false, onMutationCancel);
+        cancelBtn.id = 'mutation-cancel';
+        actRow.append(applyBtn, cancelBtn);
+        nodes.push(actRow);
+      }
     }
   } else if (activeTab === 'tops') {
     for (const style of TOP_STYLES) {
@@ -1031,6 +1279,11 @@ async function applyCardBytes(bytes: Uint8Array): Promise<boolean> {
   const decoded = decodeSeed(seed);
   if (!decoded) return false;
   update(decoded);
+  // A person has just arrived from outside: this is the
+  // receiver's moment (R2-4). update() cleared the flag; set it
+  // now and re-render so the notice is what the panel shows.
+  restoredNotice = true;
+  renderOptions();
   return true;
 }
 
@@ -1195,6 +1448,16 @@ interface FittingRoomBridge {
    *  URL — the same composition the "make a card" button
    *  downloads. Null when no image is held. */
   sdCardDataURL(): Promise<string | null>;
+  /** Mutation state for verification: the candidate shelf
+   *  currently on offer (as seeds), the previewed candidate,
+   *  whether the restored-person notice is up, and the
+   *  on-device mutation history (mutation-history.ts). */
+  getMutationState(): {
+    candidateSeeds: string[];
+    selectedSeed: string | null;
+    restoredNotice: boolean;
+    history: MutationHistoryEvent[];
+  };
 }
 const bridge: FittingRoomBridge = {
   ready: true,
@@ -1238,6 +1501,17 @@ const bridge: FittingRoomBridge = {
       seed,
     };
   },
+  getMutationState: () => ({
+    candidateSeeds: mutationCands
+      ? mutationCands.list.map((c) => encodeSeed({ ...outfit, character: c }))
+      : [],
+    selectedSeed:
+      mutationCands && mutationSelected !== null
+        ? encodeSeed({ ...outfit, character: mutationCands.list[mutationSelected] })
+        : null,
+    restoredNotice,
+    history: loadMutationHistory(),
+  }),
   getSdState: () => ({
     configured: Boolean(sdSettings.endpoint),
     prompt: buildImagePrompt(outfit, { extra: sdExtra }).prompt,

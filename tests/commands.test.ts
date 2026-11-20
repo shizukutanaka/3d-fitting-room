@@ -19,6 +19,7 @@ import {
   SHOE_STYLES,
 } from '../src/outfit';
 import { synthesizeCharacter } from '../src/genetics';
+import { deriveMutationSeed, mutateCharacter } from '../src/mutation';
 import { decodeSeed, encodeSeed } from '../src/seed';
 import { sanitizeCharacter } from '../src/character';
 
@@ -311,6 +312,82 @@ describe('blend_characters', () => {
       const result = executeCommands(commands, DEFAULT_OUTFIT);
       expect(youthScore(result.outfit.character)).toBeLessThanOrEqual(YOUTH_SCORE_MAX + 1e-9);
     }
+  });
+});
+
+describe('mutate_character', () => {
+  it('varies the current person exactly as the pure function does, and keeps the clothes', () => {
+    const { commands, rejected } = validateCommands([
+      { type: 'mutate_character', strength: 'bold', mutationSeed: 7 },
+    ]);
+    expect(rejected).toEqual([]);
+    const current = { ...DEFAULT_OUTFIT, topStyle: 'hoodie' as const, pose: 'wave' as const };
+    const result = executeCommands(commands, current);
+    const expected = mutateCharacter(current.character, 7, 'bold');
+    expect(result.outfit.character).toEqual(expected);
+    expect(result.outfit.topStyle).toBe('hoodie');
+    expect(result.outfit.pose).toBe('wave');
+    expect(result.applied).toEqual(['mutate_character strength=bold mutationSeed=7']);
+    // Deterministic through the command path too.
+    expect(executeCommands(commands, current).outfit.character).toEqual(expected);
+  });
+
+  it('derives a deterministic mutation seed from the current person when none is given', () => {
+    const { commands, rejected } = validateCommands([
+      { type: 'mutate_character', strength: 'standard' },
+    ]);
+    expect(rejected).toEqual([]);
+    const derived = deriveMutationSeed(encodeSeed(DEFAULT_OUTFIT));
+    const expected = mutateCharacter(DEFAULT_OUTFIT.character, derived, 'standard');
+    const result = executeCommands(commands, DEFAULT_OUTFIT);
+    expect(result.outfit.character).toEqual(expected);
+    expect(result.applied).toEqual([
+      `mutate_character strength=standard mutationSeed=${derived}`,
+    ]);
+    expect(executeCommands(commands, DEFAULT_OUTFIT).outfit.character).toEqual(expected);
+  });
+
+  it('rejects an invented strength and a non-numeric mutation seed, with reasons', () => {
+    const { commands, rejected } = validateCommands([
+      { type: 'mutate_character', strength: 'wild', mutationSeed: 1 },
+      { type: 'mutate_character', mutationSeed: 1 },
+      { type: 'mutate_character', strength: 'subtle', mutationSeed: 'soon' },
+      { type: 'mutate_character', strength: 'subtle', mutationSeed: null },
+    ]);
+    expect(commands).toEqual([]);
+    expect(rejected).toHaveLength(4);
+    expect(rejected[0].reason).toContain('strength');
+    expect(rejected[1].reason).toContain('strength');
+    expect(rejected[2].reason).toContain('mutationSeed');
+    expect(rejected[3].reason).toContain('mutationSeed');
+  });
+
+  it('the adult safety restriction fences varied people on the command path too', () => {
+    const youthward = {
+      ...DEFAULT_OUTFIT,
+      character: sanitizeCharacter({
+        height: 1.45,
+        bust: 0.8,
+        waist: 1.22,
+        hip: 0.86,
+        build: 0.85,
+        shoulderWidth: 0.88,
+      }),
+    };
+    for (let s = 0; s < 50; s++) {
+      const { commands, rejected } = validateCommands([
+        { type: 'mutate_character', strength: 'bold', mutationSeed: s },
+      ]);
+      expect(rejected).toEqual([]);
+      const result = executeCommands(commands, youthward);
+      expect(youthScore(result.outfit.character)).toBeLessThanOrEqual(YOUTH_SCORE_MAX + 1e-9);
+    }
+  });
+
+  it('appears in the generated protocol description', () => {
+    const text = describeCommandProtocol();
+    expect(text).toContain('mutate_character');
+    expect(text).toContain('subtle | standard | bold');
   });
 });
 
