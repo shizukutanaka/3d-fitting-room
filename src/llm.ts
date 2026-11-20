@@ -135,8 +135,21 @@ export async function testConnection(
   }
 }
 
+/** The name of each UI language, for instructing the model to
+ *  reply in the language the user is reading. */
+const REPLY_LANGS: Record<Lang, string> = {
+  ja: 'Japanese',
+  en: 'English',
+  es: 'Spanish',
+  zh: 'Chinese',
+  fr: 'French',
+  de: 'German',
+  pt: 'Portuguese',
+  ko: 'Korean',
+};
+
 export function buildSystemPrompt(state: Outfit, lang: Lang): string {
-  const replyLang = lang === 'ja' ? 'Japanese' : 'English';
+  const replyLang = REPLY_LANGS[lang];
   return [
     'You operate a 3D avatar fitting-room app for the user, through commands.',
     'The user writes an instruction; you translate it into commands from the protocol below.',

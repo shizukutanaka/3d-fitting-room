@@ -8,6 +8,9 @@ import { applyOutfit } from './items';
 import { createStage } from './scene';
 import { composeShareCard, composeShareCardFromImage, downloadBlob } from './share';
 import {
+  LANGS,
+  LANG_LABELS,
+  LANG_LOCALES,
   detectLang,
   getLang,
   setLang,
@@ -1003,6 +1006,9 @@ function renderOptions(): void {
     }
   } else if (activeTab === 'character') {
     const c = outfit.character;
+    // M9: the adult/fictional principle stands at the head of the
+    // character tab too — the place where a person is made.
+    nodes.push(el('p', 'principle-note', t('principle.note')));
     // name: the identity anchor (PERSPECTIVES-2.md R2-1/R2-2).
     // Optional, device-local, travels inside the seed and is
     // noted on the share card as the wearer — since the
@@ -1255,9 +1261,10 @@ function renderOptions(): void {
         row.append(input);
       } else {
         const isCurrent = entry.id === roster.currentId;
+        const fullWidthParens = getLang() === 'ja' || getLang() === 'zh';
         const loadBtn = chip(
           isCurrent
-            ? getLang() === 'ja'
+            ? fullWidthParens
               ? `${label}（${t('ui.currentPerson')}）`
               : `${label} (${t('ui.currentPerson')})`
             : label,
@@ -1393,7 +1400,7 @@ function renderOptions(): void {
       const row = el('div', 'seed-row');
       const person = decodeSeed(ev.seed);
       const label = ev.name || person?.name || t('ui.unnamed');
-      const when = new Date(ev.at).toLocaleString(getLang() === 'ja' ? 'ja-JP' : 'en-US', {
+      const when = new Date(ev.at).toLocaleString(LANG_LOCALES[getLang()], {
         month: 'numeric',
         day: 'numeric',
         hour: '2-digit',
@@ -1788,11 +1795,21 @@ function applyStaticTexts(): void {
   document.getElementById('working-title')!.textContent = t('app.workingTitle');
   document.getElementById('tagline')!.textContent = t('app.tagline');
   document.getElementById('footer-note')!.textContent = t('footer.note');
+  document.getElementById('footer-principle')!.textContent = t('principle.note');
   document.getElementById('btn-photo')!.textContent = t('ui.savePhoto');
   document.getElementById('btn-random')!.textContent = t('ui.random');
   document.getElementById('btn-spin')!.textContent = t('ui.spin');
   document.getElementById('btn-reset-view')!.textContent = t('ui.resetView');
-  document.getElementById('lang-toggle')!.textContent = getLang() === 'ja' ? 'EN' : '日本語';
+  const langSelect = document.getElementById('lang-select') as HTMLSelectElement;
+  if (langSelect.options.length === 0) {
+    for (const lang of LANGS) {
+      const opt = document.createElement('option');
+      opt.value = lang;
+      opt.textContent = LANG_LABELS[lang];
+      langSelect.append(opt);
+    }
+  }
+  langSelect.value = getLang();
   document.title = `${t('app.title')}（${t('app.workingTitle')}）`;
 }
 
@@ -1843,8 +1860,8 @@ spinBtn.addEventListener('click', () => {
 document.getElementById('btn-reset-view')!.addEventListener('click', () => {
   stage.resetView();
 });
-document.getElementById('lang-toggle')!.addEventListener('click', () => {
-  const next: Lang = getLang() === 'ja' ? 'en' : 'ja';
+(document.getElementById('lang-select') as HTMLSelectElement).addEventListener('change', (e) => {
+  const next = (e.target as HTMLSelectElement).value as Lang;
   setLang(next);
   document.documentElement.lang = next;
   try {
@@ -2220,6 +2237,9 @@ interface FittingRoomBridge {
     playerPosition: [number, number, number];
     playerRotationY: number;
     lastAction: string | null;
+    /** The principle note currently rendered on the panel (M9),
+     *  or null when the panel is not showing it. */
+    panelNote: string | null;
   };
   /** Press a VR panel button by its action id, through the
    *  same dispatch a controller select event uses. */
@@ -2367,6 +2387,7 @@ const bridge: FittingRoomBridge = {
     ] as [number, number, number],
     playerRotationY: stage.player.rotation.y,
     lastAction: vrRig?.lastAction ? vrActionId(vrRig.lastAction) : null,
+    panelNote: vrRig ? vrRig.panel.noteText : null,
   }),
   vrPress: (actionId) => (vrRig ? vrRig.press(actionId) : false),
   vrPhotoDataURL: async () => {
