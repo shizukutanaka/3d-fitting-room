@@ -171,11 +171,13 @@ describe('skin tone mapping', () => {
   });
 });
 
-describe('seed encoding (phase 0, format v5 since the identity foundation)', () => {
+describe('seed encoding (phase 0, format v6 since the re-centering)', () => {
   const custom: Outfit = {
     name: '',
     topStyle: 'dress',
     topColor: '#3a4152',
+    outerStyle: 'coat',
+    outerColor: '#2c3a55',
     bottomStyle: 'skirt',
     bottomColor: BOTTOM_COLORS[3],
     shoeStyle: 'boots',
@@ -381,13 +383,13 @@ describe('seed encoding (phase 0, format v5 since the identity foundation)', () 
 
   it('produces a short, recognizable string', () => {
     const seed = encodeSeed(DEFAULT_OUTFIT);
-    expect(seed.startsWith('FR5-')).toBe(true);
-    // 35 payload bytes (the v4 layout + an empty name block) ->
-    // 47 base64url chars + the 4-char prefix. The bound grows
-    // with each format version's payload; what matters is that
-    // a seed stays short enough to print on a share card and
-    // type by hand.
-    expect(seed.length).toBeLessThanOrEqual(52);
+    expect(seed.startsWith('FR6-')).toBe(true);
+    // 37 payload bytes (the v4 layout + the v6 wardrobe block +
+    // an empty name block) -> 50 base64url chars + the 4-char
+    // prefix. The bound grows with each format version's
+    // payload; what matters is that a seed stays short enough
+    // to print on a share card and type by hand.
+    expect(seed.length).toBeLessThanOrEqual(56);
   });
 
   it('round-trips the body parameters within quantization (1/255 of range)', () => {

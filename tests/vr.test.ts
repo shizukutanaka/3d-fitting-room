@@ -5,6 +5,8 @@ import {
   BOTTOM_STYLES,
   GLASSES,
   HATS,
+  OUTER_COLORS,
+  OUTER_STYLES,
   POSES,
   SHOE_COLORS,
   SHOE_STYLES,
@@ -39,6 +41,8 @@ describe('VR categories are built from the outfit catalogs', () => {
   it('covers every catalog, with its colors where the catalog has them', () => {
     expect(byId.get('tops')?.items).toEqual(TOP_STYLES);
     expect(byId.get('tops')?.colors).toEqual(TOP_COLORS);
+    expect(byId.get('outer')?.items).toEqual(OUTER_STYLES);
+    expect(byId.get('outer')?.colors).toEqual(OUTER_COLORS);
     expect(byId.get('bottoms')?.items).toEqual(BOTTOM_STYLES);
     expect(byId.get('bottoms')?.colors).toEqual(BOTTOM_COLORS);
     expect(byId.get('shoes')?.items).toEqual(SHOE_STYLES);
@@ -52,6 +56,7 @@ describe('VR categories are built from the outfit catalogs', () => {
   it('splits the panel into a clothes page and an extras page', () => {
     expect(categories.filter((c) => c.page === 0).map((c) => c.id)).toEqual([
       'tops',
+      'outer',
       'bottoms',
       'shoes',
     ]);
@@ -75,8 +80,10 @@ describe('VR categories are built from the outfit catalogs', () => {
 describe('VR action ids', () => {
   const roundTrips: VrAction[] = [
     { type: 'field', field: 'topStyle', value: 'dress' },
+    { type: 'field', field: 'outerStyle', value: 'coat' },
     { type: 'field', field: 'pose', value: 'wave' },
     { type: 'color', field: 'topColor', value: '#ff8fab' },
+    { type: 'color', field: 'outerColor', value: '#2c3a55' },
     { type: 'look', id: 'labc-1-xyz' },
     { type: 'photo' },
     { type: 'turn', dir: 1 },

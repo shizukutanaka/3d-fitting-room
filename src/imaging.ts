@@ -37,11 +37,14 @@ import {
   BOTTOM_STYLES,
   GLASSES,
   HATS,
+  OUTER_COLORS,
+  OUTER_STYLES,
   POSES,
   SHOE_COLORS,
   SHOE_STYLES,
   TOP_COLORS,
   TOP_STYLES,
+  isDress,
 } from './outfit';
 
 export interface ImagingSettings {
@@ -205,6 +208,17 @@ export const GARMENT_COLOR_NAMES: Record<string, string> = {
   '#7c4a2d': 'brown',
   '#3d5a80': 'steel blue',
   '#d8b25c': 'gold',
+  '#b03050': 'wine red',
+  '#2e5e4e': 'deep green',
+  '#f2a65a': 'apricot',
+  '#5b4a68': 'muted plum',
+  '#8a6642': 'camel',
+  '#606c38': 'olive green',
+  '#c0c6cc': 'silver gray',
+  '#b08954': 'tan',
+  '#2c3a55': 'navy',
+  '#7a2e3a': 'wine',
+  '#6b7250': 'khaki olive',
 };
 
 const HAIR_STYLE_PHRASES: Record<string, string> = {
@@ -252,10 +266,18 @@ const SKIN_PHRASES = [
 const TOP_PHRASES: Record<string, string> = {
   tee: 'T-shirt',
   hoodie: 'hoodie',
+  blouse: 'blouse',
   dress: 'one-piece dress',
+  dressLong: 'long one-piece dress',
+};
+const OUTER_PHRASES: Record<string, string> = {
+  jacket: 'a jacket',
+  coat: 'a long coat',
+  cardigan: 'a knit cardigan',
 };
 const BOTTOM_PHRASES: Record<string, string> = {
   skirt: 'a skirt',
+  skirtLong: 'a long skirt',
   pants: 'pants',
   shorts: 'shorts',
 };
@@ -293,6 +315,7 @@ const POSE_PHRASES: Record<string, string> = {
  *  so a new garment or option cannot slip in undescribed. */
 export const PROMPT_CATALOGS = {
   top: TOP_STYLES,
+  outer: OUTER_STYLES,
   bottom: BOTTOM_STYLES,
   shoe: SHOE_STYLES,
   hat: HATS,
@@ -300,12 +323,14 @@ export const PROMPT_CATALOGS = {
   accessory: ACCESSORIES,
   pose: POSES,
   topColors: TOP_COLORS,
+  outerColors: OUTER_COLORS,
   bottomColors: BOTTOM_COLORS,
   shoeColors: SHOE_COLORS,
 } as const;
 
 export const PROMPT_PHRASE_TABLES = {
   top: TOP_PHRASES,
+  outer: OUTER_PHRASES,
   bottom: BOTTOM_PHRASES,
   shoe: SHOE_PHRASES,
   hat: HAT_PHRASES,
@@ -394,7 +419,11 @@ export function buildImagePrompt(outfit: Outfit, options: PromptOptions = {}): B
   // outfit, from the catalogs
   const topName = GARMENT_COLOR_NAMES[outfit.topColor] ?? '';
   parts.push(`wearing a ${topName} ${TOP_PHRASES[outfit.topStyle] ?? 'top'}`.replace(/\s+/g, ' '));
-  if (outfit.bottomStyle !== 'none' && outfit.topStyle !== 'dress') {
+  if (outfit.outerStyle !== 'none') {
+    const outerName = GARMENT_COLOR_NAMES[outfit.outerColor] ?? '';
+    parts.push(`${outerName} ${OUTER_PHRASES[outfit.outerStyle] ?? 'outerwear'} over it`.replace(/\s+/g, ' '));
+  }
+  if (outfit.bottomStyle !== 'none' && !isDress(outfit.topStyle)) {
     const bottomName = GARMENT_COLOR_NAMES[outfit.bottomColor] ?? '';
     parts.push(`${bottomName} ${BOTTOM_PHRASES[outfit.bottomStyle] ?? ''}`.replace(/\s+/g, ' '));
   }

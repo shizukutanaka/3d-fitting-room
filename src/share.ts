@@ -14,6 +14,14 @@ import { embedSeedInPng } from './cardseed';
 
 const CARD_SIZE = 1080;
 
+/** One item of the outfit as printed on the card: its label and,
+ *  for garments with a color choice, the color itself (drawn as
+ *  a swatch dot, so the combination reads at a glance). */
+export interface CardLookSegment {
+  label: string;
+  color?: string;
+}
+
 export interface ShareCardOptions {
   appName: string;
   workingTitleNote: string;
@@ -21,13 +29,19 @@ export interface ShareCardOptions {
   /** The seed string for this person + outfit: embedded into the
    *  PNG and printed on the card face. */
   seed: string;
-  /** The person's display name (optional). The card's default
-   *  form is a profile (docs/PERSPECTIVES-2.md viewpoint 6,
-   *  settled as standing): with a name, the name is the headline
-   *  and the app line moves beneath it — the card reads as this
-   *  person's profile. LEGAL-ETHICS.md judgment J-07 expressly
-   *  allows the display name on the card (product name, seed and
-   *  display name are the permitted inscriptions). */
+  /** The outfit being worn, item by item — the card's main text
+   *  since the re-centering (DESIGN.md §21): the card is about
+   *  today's dress-up, so the combination is what the face
+   *  spells out. Built by the caller from the outfit catalogs
+   *  and the UI language. */
+  look: CardLookSegment[];
+  /** The person's display name (optional). Since the
+   *  re-centering the name is a byline ("worn by …"), not the
+   *  headline — mi's direction overrode the profile-form
+   *  conclusion of PERSPECTIVES-2.md (see DESIGN.md §21.1).
+   *  LEGAL-ETHICS.md judgment J-07 expressly allows the display
+   *  name on the card (product name, seed and display name are
+   *  the permitted inscriptions). */
   name?: string;
 }
 
@@ -76,53 +90,100 @@ async function composeCard(drawPhoto: PhotoDrawer, opts: ShareCardOptions): Prom
   ctx.roundRect(px, py, photo, photo, 36);
   ctx.stroke();
 
-  // title block: profile form by default — a named person's
-  // name is the headline (shrunk to fit rather than clipped),
-  // and the app name + tagline become the byline. Unnamed
-  // people keep the original layout exactly.
+  // title block: the outfit is the headline act (DESIGN.md
+  // §21). The app name leads, the tagline follows, and then the
+  // combination itself is spelled out item by item with color
+  // dots — the thing a fitting-room card exists to show. The
+  // wearer's name, when there is one, is a small byline under
+  // the outfit, not the headline.
   ctx.fillStyle = '#33302a';
   ctx.textAlign = 'center';
+  let y = py + photo + 48;
+  ctx.font = '700 48px "Hiragino Sans", "Noto Sans JP", sans-serif';
+  ctx.fillText(opts.appName, CARD_SIZE / 2, y);
+  y += 28;
+  ctx.font = '400 24px "Hiragino Sans", sans-serif';
+  ctx.fillStyle = '#8a7a63';
+  const sub =
+    getLang() === 'ja'
+      ? `${opts.tagline}（${opts.workingTitleNote}）`
+      : `${opts.tagline} (${opts.workingTitleNote})`;
+  ctx.fillText(sub, CARD_SIZE / 2, y);
+
+  // the outfit, item by item: greedy-centered lines of segments,
+  // each segment a color dot (when the item has a color) plus its
+  // label. Two lines at most; the catalogs keep labels short.
+  y += 34;
+  ctx.font = '600 25px "Hiragino Sans", "Noto Sans JP", sans-serif';
+  ctx.fillStyle = '#33302a';
+  const maxLineWidth = CARD_SIZE - 90;
+  const segWidth = (seg: CardLookSegment): number =>
+    (seg.color ? 26 : 0) + ctx.measureText(seg.label).width;
+  const lines: CardLookSegment[][] = [];
+  let line: CardLookSegment[] = [];
+  let lineWidth = 0;
+  for (const seg of opts.look) {
+    const w = segWidth(seg);
+    const added = line.length ? w + 22 : w;
+    if (line.length && lineWidth + added > maxLineWidth && lines.length === 0) {
+      lines.push(line);
+      line = [seg];
+      lineWidth = w;
+    } else {
+      line.push(seg);
+      lineWidth += added;
+    }
+  }
+  if (line.length) lines.push(line);
+  for (const ln of lines.slice(0, 2)) {
+    const total = ln.reduce((sum, seg, i) => sum + segWidth(seg) + (i ? 22 : 0), 0);
+    let x = (CARD_SIZE - total) / 2;
+    ctx.textAlign = 'left';
+    for (const seg of ln) {
+      if (seg.color) {
+        ctx.beginPath();
+        ctx.arc(x + 9, y - 8, 9, 0, Math.PI * 2);
+        ctx.fillStyle = seg.color;
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(51,48,42,0.35)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        x += 26;
+        ctx.fillStyle = '#33302a';
+      }
+      ctx.fillText(seg.label, x, y);
+      x += ctx.measureText(seg.label).width + 22;
+    }
+    ctx.textAlign = 'center';
+    y += 27;
+  }
+
+  // the wearer, as a byline (J-07 permits the display name)
   const personName = (opts.name ?? '').trim();
   if (personName) {
-    let size = 58;
-    ctx.font = `700 ${size}px "Hiragino Sans", "Noto Sans JP", sans-serif`;
-    while (size > 30 && ctx.measureText(personName).width > CARD_SIZE - 120) {
-      size -= 4;
-      ctx.font = `700 ${size}px "Hiragino Sans", "Noto Sans JP", sans-serif`;
-    }
-    ctx.fillText(personName, CARD_SIZE / 2, py + photo + 72);
-    ctx.font = '400 28px "Hiragino Sans", sans-serif';
+    y += 2;
+    ctx.font = '400 22px "Hiragino Sans", sans-serif';
     ctx.fillStyle = '#8a7a63';
-    const sub =
-      getLang() === 'ja'
-        ? `${opts.appName} — ${opts.tagline}（${opts.workingTitleNote}）`
-        : `${opts.appName} — ${opts.tagline} (${opts.workingTitleNote})`;
-    ctx.fillText(sub, CARD_SIZE / 2, py + photo + 114);
-  } else {
-    ctx.font = '700 58px "Hiragino Sans", "Noto Sans JP", sans-serif';
-    ctx.fillText(opts.appName, CARD_SIZE / 2, py + photo + 72);
-    ctx.font = '400 28px "Hiragino Sans", sans-serif';
-    ctx.fillStyle = '#8a7a63';
-    const sub =
-      getLang() === 'ja'
-        ? `${opts.tagline}（${opts.workingTitleNote}）`
-        : `${opts.tagline} (${opts.workingTitleNote})`;
-    ctx.fillText(sub, CARD_SIZE / 2, py + photo + 114);
+    const byline =
+      getLang() === 'ja' ? `着用: ${personName}` : `Worn by: ${personName}`;
+    ctx.fillText(byline, CARD_SIZE / 2, y);
+    y += 25;
   }
 
   // the seed, printed bare so it can be copied off the image by
   // eye and pasted into the app when the embedded chunk is gone
-  ctx.font = '600 24px ui-monospace, "SF Mono", Menlo, monospace';
+  ctx.font = '600 22px ui-monospace, "SF Mono", Menlo, monospace';
   ctx.fillStyle = '#6b5d49';
-  ctx.fillText(opts.seed, CARD_SIZE / 2, py + photo + 152);
+  ctx.fillText(opts.seed, CARD_SIZE / 2, y);
+  y += 23;
 
   // J-07: the person on the card is fictional — say so on the card
-  ctx.font = '400 22px "Hiragino Sans", sans-serif';
+  ctx.font = '400 20px "Hiragino Sans", sans-serif';
   ctx.fillStyle = '#8a7a63';
   ctx.fillText(
     getLang() === 'ja' ? '※この人物は架空のキャラクターです' : '* This character is fictional.',
     CARD_SIZE / 2,
-    py + photo + 184,
+    y,
   );
 
   const raw = await new Promise<Blob>((resolve, reject) => {

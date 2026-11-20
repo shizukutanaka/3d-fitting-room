@@ -105,12 +105,12 @@ describe('display name (sanitizeName)', () => {
   });
 });
 
-describe('seed v5 (name block)', () => {
+describe('seed name block (v5 introduced it; v6 is the current format)', () => {
   const named: Outfit = { ...DEFAULT_OUTFIT, name: 'ミライ' };
 
   it('round-trips a Japanese name exactly', () => {
     const seed = encodeSeed(named);
-    expect(seed.startsWith('FR5-')).toBe(true);
+    expect(seed.startsWith('FR6-')).toBe(true);
     const back = decodeSeed(seed);
     expect(back).not.toBeNull();
     expect(back!.name).toBe('ミライ');

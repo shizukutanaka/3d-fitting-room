@@ -9,11 +9,13 @@ import * as THREE from 'three';
 import { latheFromProfile, type AvatarRig } from './avatar';
 import { bodyRadiusFactor, legGirthFactor, type CharacterParams } from './character';
 import { fabricTextures, leatherTextures, ribbedBump } from './textures';
+import { isDress } from './outfit';
 import type {
   AccessoryId,
   BottomStyle,
   GlassesId,
   HatId,
+  OuterStyle,
   Outfit,
   ShoeStyle,
   TopStyle,
@@ -117,8 +119,39 @@ function buildTop(style: TopStyle, cloth: THREE.Material, c: CharacterParams): T
     for (const side of [-1, 1]) {
       g.add(mesh(new THREE.CylinderGeometry(0.0035, 0.0035, 0.055, 8), stringMat, side * 0.018, 0.185, 0.098));
     }
+  } else if (style === 'blouse') {
+    // blouse: a fitted top — the tee's silhouette drawn in at
+    // the waist, with a small collar ring at the neck.
+    const top = latheFromProfile(
+      shapeTop(
+        [
+          [0.146, -0.275],
+          [0.152, -0.24],
+          [0.146, -0.18],
+          [0.126, -0.1],
+          [0.128, -0.04],
+          [0.155, 0.05],
+          [0.15, 0.13],
+          [0.126, 0.215],
+          [0.084, 0.27],
+          [0.058, 0.295],
+        ],
+        c,
+      ),
+      cloth,
+    );
+    top.scale.set(1, 1, 0.8);
+    g.add(top);
+    const collarF = bodyRadiusFactor(1.385, c);
+    const collar = mesh(new THREE.TorusGeometry(0.062, 0.009, 10, 36), cloth, 0, 0.272, 0);
+    collar.rotation.x = Math.PI / 2;
+    collar.scale.set(collarF, 0.8 * collarF, collarF);
+    g.add(collar);
   } else {
-    // dress: fitted bodice flowing into a flared skirt in one lathe
+    // dresses: fitted bodice flowing into a flared skirt in one
+    // lathe. 'dress' hems at the knee; 'dressLong' continues the
+    // same flare to the ankle.
+    const long = style === 'dressLong';
     const dress = latheFromProfile(
       shapeTop(
         [
@@ -131,8 +164,17 @@ function buildTop(style: TopStyle, cloth: THREE.Material, c: CharacterParams): T
           [0.13, -0.115],
           [0.148, -0.2],
           [0.18, -0.36],
-          [0.218, -0.52],
-          [0.248, -0.66],
+          ...(long
+            ? ([
+                [0.205, -0.52],
+                [0.232, -0.72],
+                [0.258, -0.9],
+                [0.272, -1.02],
+              ] as Array<[number, number]>)
+            : ([
+                [0.218, -0.52],
+                [0.248, -0.66],
+              ] as Array<[number, number]>)),
         ],
         c,
       ),
@@ -151,6 +193,127 @@ function buildTop(style: TopStyle, cloth: THREE.Material, c: CharacterParams): T
     band.rotation.x = Math.PI / 2;
     band.scale.set(bandF, 0.8 * bandF, bandF);
     g.add(band);
+  }
+  return g;
+}
+
+// ---------- outerwear (anchor: torso center, layered over the top) ----------
+// The re-centering's new category (DESIGN.md §21): a fitting room
+// is where you layer. Each style is a shell lathe sewn ~2 cm
+// outside the top beneath it, run through the same shapeTop()
+// auto-fit, so a changed body re-fits the layer exactly like the
+// top. The profiles are checked against what they must clear:
+// the hoodie is the bulkiest top (r 0.172), the dress flares to
+// r 0.272 at its long hem and the skirt to r 0.232 — the coat's
+// lower flare is drawn outside all of them, so outerwear
+// composes with every top and bottom instead of suppressing
+// them. A front placket strip and a collar carry the "worn"
+// read; the shell is closed, in the same visual language as the
+// sleeveless tops.
+
+function buildOuter(style: OuterStyle, color: string, c: CharacterParams): THREE.Group | null {
+  if (style === 'none') return null;
+  const g = new THREE.Group();
+  const knit = style === 'cardigan';
+  const cloth = fabricMat(color, style === 'coat' ? 0.92 : 0.85);
+  if (knit) {
+    // The cardigan is a knit: the beanie's ribbed bump, reused.
+    cloth.bumpMap = ribbedBump([16, 1]);
+    cloth.bumpScale = 0.5;
+  }
+  // Profiles run bottom -> top (ascending y), like the tops and
+  // skirts: LatheGeometry's faces point outward only in that
+  // order. (The dress profile is the one historical exception —
+  // it runs top -> bottom and only reads correctly because the
+  // torso lathe beneath it shares the inversion. Outerwear
+  // layers over correctly-wound tops, so it cannot rely on that
+  // accident; the first draft of these profiles ran top -> down
+  // and the shells rendered inside-out, the top showing through
+  // the front. Pinned by a standalone lathe repro, DESIGN §21.4.)
+  const profiles: Record<Exclude<OuterStyle, 'none'>, Array<[number, number]>> = {
+    jacket: [
+      [0.18, -0.3],
+      [0.17, -0.22],
+      [0.156, -0.12],
+      [0.16, -0.04],
+      [0.184, 0.05],
+      [0.178, 0.13],
+      [0.15, 0.215],
+      [0.108, 0.27],
+      [0.078, 0.295],
+    ],
+    coat: [
+      [0.258, -0.62],
+      [0.238, -0.52],
+      [0.208, -0.42],
+      [0.185, -0.32],
+      [0.175, -0.22],
+      [0.158, -0.12],
+      [0.16, -0.04],
+      [0.185, 0.05],
+      [0.178, 0.13],
+      [0.15, 0.215],
+      [0.108, 0.27],
+      [0.078, 0.295],
+    ],
+    cardigan: [
+      [0.19, -0.35],
+      [0.176, -0.3],
+      [0.165, -0.22],
+      [0.15, -0.12],
+      [0.152, -0.04],
+      [0.176, 0.05],
+      [0.17, 0.13],
+      [0.144, 0.215],
+      [0.1, 0.27],
+      [0.07, 0.295],
+    ],
+  };
+  const shaped = shapeTop(profiles[style], c);
+  const shell = latheFromProfile(shaped, cloth);
+  shell.scale.set(1, 1, 0.8);
+  g.add(shell);
+  if (!knit) {
+    // collar: a standing ring at the neck, following the body's
+    // radius factor at its height like the blouse collar.
+    const collarF = bodyRadiusFactor(1.385, c);
+    const collar = mesh(new THREE.TorusGeometry(0.07, 0.014, 10, 36), cloth, 0, 0.268, 0);
+    collar.rotation.x = Math.PI / 2;
+    collar.scale.set(collarF, 0.8 * collarF, collarF);
+    g.add(collar);
+  }
+  // placket: a thin strip down the front. Its z is read off the
+  // shaped profile at its mid height (front surface = r × the
+  // shell's 0.8 z-scale, plus the strip's own half-depth), so it
+  // lies on the shell at any body shape instead of floating or
+  // sinking. Its length follows the shell.
+  const bottomY = style === 'coat' ? -0.55 : -0.28;
+  const midY = (0.18 + bottomY) / 2;
+  let rAtMid = shaped[0][0];
+  for (let i = 0; i + 1 < shaped.length; i++) {
+    const [r0, y0] = shaped[i];
+    const [r1, y1] = shaped[i + 1];
+    if ((midY - y0) * (midY - y1) <= 0) {
+      rAtMid = r0 + ((r1 - r0) * (midY - y0)) / (y1 - y0 || 1);
+      break;
+    }
+    rAtMid = r1;
+  }
+  const placket = mesh(
+    new THREE.BoxGeometry(0.02, 0.18 - bottomY, 0.006),
+    cloth,
+    0,
+    midY,
+    rAtMid * 0.8 + 0.002,
+  );
+  g.add(placket);
+  if (style === 'coat') {
+    // a belt at the waist, like the dress band
+    const beltF = bodyRadiusFactor(1.005, c);
+    const belt = mesh(new THREE.TorusGeometry(0.163, 0.012, 10, 40), cloth, 0, -0.115, 0);
+    belt.rotation.x = Math.PI / 2;
+    belt.scale.set(beltF, 0.8 * beltF, beltF);
+    g.add(belt);
   }
   return g;
 }
@@ -218,6 +381,28 @@ function buildBottom(style: BottomStyle, cloth: THREE.Material, c: CharacterPara
             [0.216, -0.33],
             [0.196, -0.22],
             [0.182, -0.13],
+            [0.176, -0.065],
+            [0.166, -0.03],
+            [0.147, 0.03],
+          ],
+          c,
+        ),
+        cloth,
+      );
+      skirt.scale.set(1, 1, 0.8);
+      g.add(skirt);
+      return g;
+    }
+    case 'skirtLong': {
+      // the same flare continued to mid-shin
+      const skirt = latheFromProfile(
+        shapeBottom(
+          [
+            [0.262, -0.78],
+            [0.246, -0.62],
+            [0.226, -0.45],
+            [0.202, -0.28],
+            [0.186, -0.13],
             [0.176, -0.065],
             [0.166, -0.03],
             [0.147, 0.03],
@@ -622,13 +807,17 @@ export function applyOutfit(rig: AvatarRig, outfit: Outfit): void {
 
   clearAnchor(rig.torsoAnchor);
   rig.torsoAnchor.add(buildTop(outfit.topStyle, rig.topMaterial, outfit.character));
+  // Outerwear layers over the top on the same anchor (profiles
+  // in buildOuter clear every top and flared bottom beneath).
+  const outer = buildOuter(outfit.outerStyle, outfit.outerColor, outfit.character);
+  if (outer) rig.torsoAnchor.add(outer);
 
   // A dress is a one-piece: it already covers waist to knee, so
   // bottoms are not rendered under it (the selection is kept in
   // the state and returns when the top changes). The base layer
   // itself is part of the body and is never removed (J-10).
   clearAnchor(rig.bottomAnchor);
-  if (outfit.topStyle !== 'dress' && outfit.bottomStyle !== 'none') {
+  if (!isDress(outfit.topStyle) && outfit.bottomStyle !== 'none') {
     const bottom = buildBottom(outfit.bottomStyle, fabricMat(outfit.bottomColor), outfit.character);
     if (bottom) rig.bottomAnchor.add(bottom);
   }

@@ -140,7 +140,7 @@ async function main() {
   results.checks.defaultSeed = await win.webContents.executeJavaScript(
     `window.__fittingRoom.getSeed()`,
   );
-  results.checks.defaultSeedIsV5 = String(results.checks.defaultSeed).startsWith('FR5-');
+  results.checks.defaultSeedIsV6 = String(results.checks.defaultSeed).startsWith('FR6-');
 
   // 1. the three bodies: state applies exactly, shots all differ
   const shots = {};
@@ -231,7 +231,7 @@ async function main() {
   // 5. the character panel shows the body sliders (skin + height
   //    + 5 body + 13 face = 20 rows) under a body group label
   await win.webContents.executeJavaScript(
-    `document.querySelectorAll('#tabs button')[0].click()`,
+    `(() => { const b = [...document.querySelectorAll('#tabs button')].find((x) => ['\u4eba\u7269', 'Character'].includes(x.textContent.trim())); if (b) b.click(); })()`,
   );
   results.checks.panel = await win.webContents.executeJavaScript(
     `new Promise((res, rej) => {

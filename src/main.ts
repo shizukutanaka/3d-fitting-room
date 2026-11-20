@@ -21,12 +21,15 @@ import {
   BOTTOM_STYLES,
   GLASSES,
   HATS,
+  OUTER_COLORS,
+  OUTER_STYLES,
   POSES,
   SHOE_COLORS,
   SHOE_STYLES,
   TOP_COLORS,
   TOP_STYLES,
   DEFAULT_OUTFIT,
+  isDress,
   loadOutfit,
   randomOutfit,
   sanitizeName,
@@ -34,6 +37,16 @@ import {
   saveOutfit,
   type Outfit,
 } from './outfit';
+import {
+  addLook,
+  loadLooks,
+  lookOf,
+  removeLook,
+  sameLook,
+  saveLooks,
+  type Look,
+  type SavedLook,
+} from './looks';
 import {
   addEntry,
   currentEntry,
@@ -123,27 +136,36 @@ stage.setSubjectHeight(outfit.character.height);
 applyOutfit(rig, outfit);
 
 type TabId =
-  | 'character'
+  | 'looks'
   | 'tops'
+  | 'outer'
   | 'bottoms'
   | 'shoes'
   | 'hat'
   | 'glasses'
   | 'accessory'
   | 'pose'
+  | 'character'
   | 'llm';
+// The tab order is the product's statement of what it is
+// (DESIGN.md §21): the fitting comes first — saved looks, then
+// the wardrobe shelves — and the person-making machinery sits
+// after the pose tab, demoted from the head of the panel where
+// the drift had put it. The AI connection stays last.
 const TABS: Array<{ id: TabId; key: I18nKey }> = [
-  { id: 'character', key: 'cat.character' },
+  { id: 'looks', key: 'cat.looks' },
   { id: 'tops', key: 'cat.tops' },
+  { id: 'outer', key: 'cat.outer' },
   { id: 'bottoms', key: 'cat.bottoms' },
   { id: 'shoes', key: 'cat.shoes' },
   { id: 'hat', key: 'cat.hat' },
   { id: 'glasses', key: 'cat.glasses' },
   { id: 'accessory', key: 'cat.accessory' },
   { id: 'pose', key: 'cat.pose' },
+  { id: 'character', key: 'cat.character' },
   { id: 'llm', key: 'cat.llm' },
 ];
-let activeTab: TabId = 'tops';
+let activeTab: TabId = 'looks';
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -217,6 +239,78 @@ function recordCommandMutations(exec: ExecutionResult): void {
   }
 }
 
+// ---- saved looks and the before/after compare (looks.ts) ----
+// Saved looks are the clothing-side save system: named
+// combinations that re-dress whoever is on stage in one tap.
+// prevLook is the clothing worn just before the last change —
+// the fitting room's "how did the other one look?" — kept in
+// memory only (it is a mirror of a moment ago, not a record).
+let savedLooks: SavedLook[] = loadLooks();
+let prevLook: Look | null = null;
+/** The name being typed into the save-look field, kept in module
+ *  state so panel re-renders never eat it (the sdExtra pattern). */
+let lookNameDraft = '';
+
+/** The current outfit's items as labeled segments — the text
+ *  form of a look, shared by the looks tab summary and the share
+ *  card face (share.ts draws them with color dots). */
+function lookSegments(o: Outfit): Array<{ label: string; color?: string }> {
+  const segs: Array<{ label: string; color?: string }> = [
+    { label: t(`top.${o.topStyle}` as I18nKey), color: o.topColor },
+  ];
+  if (o.outerStyle !== 'none') {
+    segs.push({ label: t(`outer.${o.outerStyle}` as I18nKey), color: o.outerColor });
+  }
+  if (o.bottomStyle !== 'none' && !isDress(o.topStyle)) {
+    segs.push({ label: t(`bottom.${o.bottomStyle}` as I18nKey), color: o.bottomColor });
+  }
+  segs.push({ label: t(`shoe.${o.shoeStyle}` as I18nKey), color: o.shoeColor });
+  if (o.hat !== 'none') segs.push({ label: t(`hat.${o.hat}` as I18nKey) });
+  if (o.glasses !== 'none') segs.push({ label: t(`glasses.${o.glasses}` as I18nKey) });
+  if (o.accessory !== 'none') segs.push({ label: t(`accessory.${o.accessory}` as I18nKey) });
+  return segs;
+}
+
+function lookSummaryText(o: Outfit): string {
+  return lookSegments(o).map((s) => s.label).join(' ・ ');
+}
+
+function onSaveLook(): void {
+  const name = sanitizeName(lookNameDraft);
+  if (!name) {
+    showToast(t('ui.lookNameRequired'));
+    return;
+  }
+  savedLooks = addLook(savedLooks, name, lookOf(outfit));
+  saveLooks(savedLooks);
+  lookNameDraft = '';
+  showToast(t('ui.lookSaved'));
+  renderOptions();
+}
+
+function onApplyLook(id: string): void {
+  const entry = savedLooks.find((l) => l.id === id);
+  if (!entry) return;
+  update({ ...outfit, ...entry.look });
+  showToast(t('ui.lookApplied'));
+}
+
+function onDeleteLook(id: string): void {
+  savedLooks = removeLook(savedLooks, id);
+  saveLooks(savedLooks);
+  renderOptions();
+}
+
+/** Swap the current clothing with the previous look. update()
+ *  records the clothing being replaced as the new prevLook, so
+ *  swapping twice returns exactly where you started — the
+ *  compare is a flip back and forth, not a one-way undo. */
+function onSwapLook(): void {
+  if (!prevLook) return;
+  update({ ...outfit, ...prevLook });
+  showToast(t('ui.swapped'));
+}
+
 function update(next: Outfit): void {
   // Every state that lands in the app passes the sanitize gate —
   // including the ones arriving through the verification/agent
@@ -232,7 +326,12 @@ function update(next: Outfit): void {
   mutationCands = null;
   mutationSelected = null;
   restoredNotice = false;
-  outfit = sanitizeOutfit(next);
+  const sanitized = sanitizeOutfit(next);
+  // Before/after: when the clothing actually changes, what was
+  // worn until now becomes the previous look (character-only
+  // changes and re-selecting the same item do not touch it).
+  if (!sameLook(lookOf(outfit), lookOf(sanitized))) prevLook = lookOf(outfit);
+  outfit = sanitized;
   rig.setCharacter(outfit.character);
   stage.setSubjectHeight(outfit.character.height);
   applyOutfit(rig, outfit);
@@ -780,11 +879,14 @@ async function composeSdCard(): Promise<Blob | null> {
     img.onerror = () => reject(new Error('generated image could not be loaded'));
     img.src = result.dataUrl;
   });
+  const depicted = decodeSeed(result.seed);
   return composeShareCardFromImage(img, {
     appName: t('app.title'),
     workingTitleNote: t('app.workingTitle'),
     tagline: t('app.tagline'),
     seed: result.seed,
+    look: depicted ? lookSegments(depicted) : [],
+    name: depicted?.name ?? '',
   });
 }
 
@@ -849,12 +951,63 @@ function renderOptions(): void {
     nodes.push(block);
   }
 
-  if (activeTab === 'character') {
+  if (activeTab === 'looks') {
+    // The fitting room's home tab (DESIGN.md §21): what you are
+    // wearing now, the looks you saved, and the one you just
+    // took off. Everything here is clothing — the person is
+    // never part of a look.
+    nodes.push(el('span', 'group-label', t('ui.currentLook')));
+    nodes.push(el('p', 'llm-note', lookSummaryText(outfit)));
+    const saveRow = el('div', 'seed-row');
+    const nameInput = el('input', 'seed-input');
+    nameInput.id = 'look-name';
+    nameInput.type = 'text';
+    nameInput.value = lookNameDraft;
+    nameInput.placeholder = t('ui.lookNamePlaceholder');
+    nameInput.setAttribute('aria-label', t('ui.saveLook'));
+    nameInput.addEventListener('input', () => {
+      lookNameDraft = nameInput.value;
+    });
+    nameInput.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') onSaveLook();
+    });
+    const saveBtn = chip(t('ui.saveLook'), false, onSaveLook);
+    saveBtn.id = 'look-save';
+    saveRow.append(nameInput, saveBtn);
+    nodes.push(saveRow);
+    if (savedLooks.length === 0) {
+      nodes.push(el('p', 'llm-note', t('ui.looksEmpty')));
+    }
+    for (const entry of savedLooks) {
+      const row = el('div', 'seed-row');
+      const applyBtn = chip(entry.name, false, () => onApplyLook(entry.id));
+      applyBtn.classList.add('look-apply');
+      const deleteBtn = chip(t('ui.delete'), false, () => onDeleteLook(entry.id));
+      deleteBtn.classList.add('look-delete');
+      row.append(applyBtn, deleteBtn);
+      nodes.push(row);
+      nodes.push(
+        el('p', 'llm-note', lookSegments({ ...outfit, ...entry.look }).map((s) => s.label).join(' ・ ')),
+      );
+    }
+    if (prevLook) {
+      nodes.push(el('span', 'group-label', t('ui.prevLook')));
+      nodes.push(
+        el('p', 'llm-note', lookSegments({ ...outfit, ...prevLook }).map((s) => s.label).join(' ・ ')),
+      );
+      const swapRow = el('div', 'seed-row');
+      const swapBtn = chip(t('ui.swapLook'), false, onSwapLook);
+      swapBtn.id = 'look-swap';
+      swapRow.append(swapBtn);
+      nodes.push(swapRow);
+    }
+  } else if (activeTab === 'character') {
     const c = outfit.character;
-    // name: the identity anchor, first in the tab because it is
-    // what makes this a *person* rather than a parameter set
-    // (PERSPECTIVES-2.md R2-1/R2-2). Optional, device-local,
-    // travels inside the seed and headlines the share card.
+    // name: the identity anchor (PERSPECTIVES-2.md R2-1/R2-2).
+    // Optional, device-local, travels inside the seed and is
+    // noted on the share card as the wearer — since the
+    // re-centering (DESIGN.md §21) the card's headline is the
+    // outfit, not the person.
     // J-07: naming a person after a real person is prohibited
     // by the terms — upheld by the note below, not by matching.
     nodes.push(el('span', 'group-label', t('ui.name')));
@@ -1346,6 +1499,24 @@ function renderOptions(): void {
       s.addEventListener('click', () => update({ ...outfit, topColor: color }));
       nodes.push(s);
     }
+  } else if (activeTab === 'outer') {
+    for (const style of OUTER_STYLES) {
+      nodes.push(
+        chip(t(style === 'none' ? 'item.none' : key('outer', style)), outfit.outerStyle === style, () =>
+          update({ ...outfit, outerStyle: style }),
+        ),
+      );
+    }
+    nodes.push(el('span', 'group-label', t('ui.color')));
+    for (const color of OUTER_COLORS) {
+      const s = el('button', 'swatch') as HTMLButtonElement;
+      s.type = 'button';
+      s.style.background = color;
+      s.setAttribute('aria-pressed', String(outfit.outerColor === color));
+      s.setAttribute('aria-label', `${t('ui.color')} ${color}`);
+      s.addEventListener('click', () => update({ ...outfit, outerColor: color }));
+      nodes.push(s);
+    }
   } else if (activeTab === 'bottoms') {
     for (const style of BOTTOM_STYLES) {
       nodes.push(
@@ -1354,7 +1525,7 @@ function renderOptions(): void {
         ),
       );
     }
-    if (outfit.topStyle === 'dress') {
+    if (isDress(outfit.topStyle)) {
       // The dress rule (items.ts): a one-piece hides bottoms.
       nodes.push(el('span', 'group-label', t('ui.dressHidesBottom')));
     }
@@ -1632,6 +1803,7 @@ async function exportPhoto(): Promise<void> {
     workingTitleNote: t('app.workingTitle'),
     tagline: t('app.tagline'),
     seed: encodeSeed(outfit),
+    look: lookSegments(outfit),
     name: outfit.name,
   });
   downloadBlob(blob, '3d-fitting-room.png');
@@ -1811,6 +1983,7 @@ async function composeVrPhotoCard(): Promise<Blob> {
     workingTitleNote: t('app.workingTitle'),
     tagline: t('app.tagline'),
     seed: encodeSeed(outfit),
+    look: lookSegments(outfit),
     name: outfit.name,
   });
 }
@@ -1973,6 +2146,12 @@ interface FittingRoomBridge {
   getRoster(): Roster;
   /** The on-device edit history (a read-only snapshot). */
   getLineage(): LineageEvent[];
+  /** The saved looks — named clothing combinations kept on
+   *  this device (a read-only snapshot for verification). */
+  getLooks(): SavedLook[];
+  /** The clothing worn just before the last change (the
+   *  before/after compare), or null when nothing changed yet. */
+  getPrevLook(): Look | null;
   cardDataURL(): Promise<string>;
   /** Export the current person + outfit as a 3D file ('glb' or
    *  'vrm'): the bytes as a base64 data URL, plus the part count
@@ -2073,6 +2252,8 @@ const bridge: FittingRoomBridge = {
     currentId: roster.currentId,
   }),
   getLineage: () => lineageEvents.map((e) => ({ ...e })),
+  getLooks: () => savedLooks.map((l) => ({ ...l, look: { ...l.look } })),
+  getPrevLook: () => (prevLook ? { ...prevLook } : null),
   runCommands: (raw) => {
     const list = Array.isArray(raw)
       ? raw
@@ -2140,6 +2321,7 @@ const bridge: FittingRoomBridge = {
       workingTitleNote: t('app.workingTitle'),
       tagline: t('app.tagline'),
       seed: encodeSeed(outfit),
+      look: lookSegments(outfit),
       name: outfit.name,
     });
     return new Promise<string>((resolve, reject) => {

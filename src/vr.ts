@@ -26,6 +26,8 @@ import {
   BOTTOM_STYLES,
   GLASSES,
   HATS,
+  OUTER_COLORS,
+  OUTER_STYLES,
   POSES,
   SHOE_COLORS,
   SHOE_STYLES,
@@ -50,12 +52,12 @@ export interface VrCategory {
   page: 0 | 1;
   labelKey: I18nKey;
   /** The outfit field the item chips set. */
-  field: 'topStyle' | 'bottomStyle' | 'shoeStyle' | 'hat' | 'glasses' | 'accessory' | 'pose';
+  field: 'topStyle' | 'outerStyle' | 'bottomStyle' | 'shoeStyle' | 'hat' | 'glasses' | 'accessory' | 'pose';
   /** i18n prefix for item labels (`top.tee`, `bottom.skirt`…);
    *  the value 'none' always reads through 'item.none'. */
   itemPrefix: string;
   items: readonly string[];
-  colorField?: 'topColor' | 'bottomColor' | 'shoeColor';
+  colorField?: 'topColor' | 'outerColor' | 'bottomColor' | 'shoeColor';
   colors?: readonly string[];
 }
 
@@ -64,6 +66,10 @@ export function buildVrCategories(): VrCategory[] {
     {
       id: 'tops', page: 0, labelKey: 'cat.tops', field: 'topStyle', itemPrefix: 'top',
       items: TOP_STYLES, colorField: 'topColor', colors: TOP_COLORS,
+    },
+    {
+      id: 'outer', page: 0, labelKey: 'cat.outer', field: 'outerStyle', itemPrefix: 'outer',
+      items: OUTER_STYLES, colorField: 'outerColor', colors: OUTER_COLORS,
     },
     {
       id: 'bottoms', page: 0, labelKey: 'cat.bottoms', field: 'bottomStyle', itemPrefix: 'bottom',
@@ -94,7 +100,7 @@ export function vrItemLabelKey(category: VrCategory, value: string): I18nKey {
  *  into an outfit patch; the rest are host-level intents. */
 export type VrAction =
   | { type: 'field'; field: VrCategory['field']; value: string }
-  | { type: 'color'; field: 'topColor' | 'bottomColor' | 'shoeColor'; value: string }
+  | { type: 'color'; field: 'topColor' | 'outerColor' | 'bottomColor' | 'shoeColor'; value: string }
   | { type: 'look'; id: string }
   | { type: 'photo' }
   | { type: 'turn'; dir: 1 | -1 }
@@ -121,9 +127,9 @@ export function vrActionId(action: VrAction): string {
 }
 
 const FIELD_NAMES: ReadonlySet<string> = new Set([
-  'topStyle', 'bottomStyle', 'shoeStyle', 'hat', 'glasses', 'accessory', 'pose',
+  'topStyle', 'outerStyle', 'bottomStyle', 'shoeStyle', 'hat', 'glasses', 'accessory', 'pose',
 ]);
-const COLOR_FIELD_NAMES: ReadonlySet<string> = new Set(['topColor', 'bottomColor', 'shoeColor']);
+const COLOR_FIELD_NAMES: ReadonlySet<string> = new Set(['topColor', 'outerColor', 'bottomColor', 'shoeColor']);
 
 /** Parse a panel button id back into an action. Syntax only —
  *  whether the value is a real catalog entry is decided by
@@ -146,7 +152,7 @@ export function parseVrActionId(id: string): VrAction | null {
   if (parts.length === 3 && parts[0] === 'c' && COLOR_FIELD_NAMES.has(parts[1])) {
     return {
       type: 'color',
-      field: parts[1] as 'topColor' | 'bottomColor' | 'shoeColor',
+      field: parts[1] as 'topColor' | 'outerColor' | 'bottomColor' | 'shoeColor',
       value: parts[2],
     };
   }
@@ -265,7 +271,12 @@ export function nextXrQualityLevel(current: number, avgFrameMs: number): number 
 export const VR_PANEL_POSITION = new THREE.Vector3(-1.62, 1.34, -0.5);
 export const VR_PANEL_FACE_TARGET = new THREE.Vector3(0, 1.3, 2.2);
 export const VR_PANEL_WIDTH = 1.06;
-export const VR_PANEL_HEIGHT = 1.5;
+/** Board height: sized so the clothes page fits every wardrobe
+ *  category (tops / outer / bottoms / shoes, each with its color
+ *  row) above the saved-looks shelf — the outer category joined
+ *  at the re-centering integration (DESIGN.md §21/§22.8) and
+ *  the stack outgrew the original 1.5 m board. */
+export const VR_PANEL_HEIGHT = 1.85;
 /** How many saved looks the panel lists (the shelf's first
  *  entries — the store itself keeps more). */
 export const VR_LOOKS_SHOWN = 6;

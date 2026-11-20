@@ -4,9 +4,10 @@
 
 import { DEFAULT_CHARACTER, sanitizeCharacter, type CharacterParams } from './character';
 
-export type TopStyle = 'tee' | 'hoodie' | 'dress';
-export type BottomStyle = 'none' | 'skirt' | 'pants' | 'shorts';
+export type TopStyle = 'tee' | 'hoodie' | 'blouse' | 'dress' | 'dressLong';
+export type BottomStyle = 'none' | 'skirt' | 'skirtLong' | 'pants' | 'shorts';
 export type ShoeStyle = 'flats' | 'sneakers' | 'pumps' | 'boots';
+export type OuterStyle = 'none' | 'jacket' | 'coat' | 'cardigan';
 export type HatId = 'none' | 'cap' | 'beanie' | 'catears' | 'ribbon';
 export type GlassesId = 'none' | 'round' | 'square' | 'sunglasses';
 export type AccessoryId = 'none' | 'necklace' | 'scarf' | 'bag';
@@ -28,6 +29,13 @@ export interface Outfit {
   name: string;
   topStyle: TopStyle;
   topColor: string;
+  /** Layered outerwear over the top (the re-centering added the
+   *  category: a fitting room without layering is a shelf with a
+   *  hole in it — DESIGN.md §21). 'none' is the regular state.
+   *  The coat profile flares to clear a dress or skirt beneath
+   *  it, so outerwear composes with every top (see items.ts). */
+  outerStyle: OuterStyle;
+  outerColor: string;
   /** Lower-body garment. 'none' shows only the always-on base
    *  layer (LEGAL-ETHICS J-10: the base layer is never removed).
    *  A dress is a one-piece and suppresses bottoms at render time
@@ -49,7 +57,9 @@ export interface Outfit {
   character: CharacterParams;
 }
 
-/** Color swatches offered for tops. */
+/** Color swatches offered for tops. New colors are only ever
+ *  appended: seeds store palette indices, so the existing
+ *  entries must never move (seed.ts). */
 export const TOP_COLORS = [
   '#ffffff',
   '#ff8fab',
@@ -58,10 +68,14 @@ export const TOP_COLORS = [
   '#c9a7ff',
   '#ffd166',
   '#3a4152',
+  '#b03050',
+  '#2e5e4e',
+  '#f2a65a',
 ] as const;
 
 /** Color swatches offered for bottoms (denim first: it is the
- *  color pants are expected to come in). */
+ *  color pants are expected to come in). Appended only, like
+ *  TOP_COLORS. */
 export const BOTTOM_COLORS = [
   '#44557a',
   '#2f3542',
@@ -70,11 +84,14 @@ export const BOTTOM_COLORS = [
   '#7cc7ff',
   '#8fe3c0',
   '#ffd166',
+  '#5b4a68',
+  '#8a6642',
+  '#606c38',
 ] as const;
 
 /** Color swatches offered for shoes. The first entry is the color
  *  of the flats the avatar originally shipped with, so the default
- *  outfit's look is unchanged. */
+ *  outfit's look is unchanged. Appended only, like TOP_COLORS. */
 export const SHOE_COLORS = [
   '#5e2233',
   '#26262b',
@@ -83,11 +100,43 @@ export const SHOE_COLORS = [
   '#a83c46',
   '#3d5a80',
   '#d8b25c',
+  '#ffffff',
+  '#c0c6cc',
+  '#2e5e4e',
 ] as const;
 
-export const TOP_STYLES: TopStyle[] = ['tee', 'hoodie', 'dress'];
-export const BOTTOM_STYLES: BottomStyle[] = ['none', 'skirt', 'pants', 'shorts'];
+/** Color swatches offered for outerwear (coats and jackets live
+ *  in a more muted register than tops). The first entry is the
+ *  default outer color — it only shows once an outer style is
+ *  picked, so the default outfit's look is unchanged. */
+export const OUTER_COLORS = [
+  '#b08954',
+  '#26262b',
+  '#2c3a55',
+  '#7a2e3a',
+  '#e8e2d6',
+  '#6b7250',
+  '#3a4152',
+  '#8a6642',
+] as const;
+
+// Style lists are append-only for the same reason as the color
+// palettes: seeds store indices into them, so an existing entry
+// must never move. (The re-centering's first draft inserted
+// 'skirtLong' mid-list and a v3 compat test caught a vintage
+// seed's pants turning into a long skirt.)
+export const TOP_STYLES: TopStyle[] = ['tee', 'hoodie', 'dress', 'blouse', 'dressLong'];
+export const BOTTOM_STYLES: BottomStyle[] = ['none', 'skirt', 'pants', 'shorts', 'skirtLong'];
 export const SHOE_STYLES: ShoeStyle[] = ['flats', 'sneakers', 'pumps', 'boots'];
+export const OUTER_STYLES: OuterStyle[] = ['none', 'jacket', 'coat', 'cardigan'];
+
+/** The one-piece tops: a dress already covers waist to knee (or
+ *  ankle), so bottoms are not rendered under one. Every consumer
+ *  that special-cases dresses (items.ts, imaging.ts, the UI)
+ *  reads this single predicate. */
+export function isDress(style: TopStyle): boolean {
+  return style === 'dress' || style === 'dressLong';
+}
 export const HATS: HatId[] = ['none', 'cap', 'beanie', 'catears', 'ribbon'];
 export const GLASSES: GlassesId[] = ['none', 'round', 'square', 'sunglasses'];
 export const ACCESSORIES: AccessoryId[] = ['none', 'necklace', 'scarf', 'bag'];
@@ -97,6 +146,8 @@ export const DEFAULT_OUTFIT: Outfit = {
   name: '',
   topStyle: 'tee',
   topColor: '#ff8fab',
+  outerStyle: 'none',
+  outerColor: '#b08954',
   bottomStyle: 'none',
   bottomColor: '#44557a',
   shoeStyle: 'flats',
@@ -167,6 +218,15 @@ export function sanitizeOutfit(raw: unknown): Outfit {
       typeof o.topColor === 'string' && (TOP_COLORS as readonly string[]).includes(o.topColor)
         ? o.topColor
         : DEFAULT_OUTFIT.topColor,
+    // Saves and seeds from before the re-centering have no outer
+    // keys: they load with no outerwear, which is what they
+    // showed.
+    outerStyle: oneOf(o.outerStyle, OUTER_STYLES, DEFAULT_OUTFIT.outerStyle),
+    outerColor:
+      typeof o.outerColor === 'string' &&
+      (OUTER_COLORS as readonly string[]).includes(o.outerColor)
+        ? o.outerColor
+        : DEFAULT_OUTFIT.outerColor,
     // Saves from before the bottoms/shoes categories have none of
     // these keys: they load with the defaults, which reproduce the
     // old look (no bottoms, the original flats).
@@ -220,6 +280,8 @@ export function randomOutfit(rng: () => number = Math.random): Outfit {
     name: '',
     topStyle: pick(TOP_STYLES, rng),
     topColor: pick(TOP_COLORS, rng),
+    outerStyle: pick(OUTER_STYLES, rng),
+    outerColor: pick(OUTER_COLORS, rng),
     bottomStyle: pick(BOTTOM_STYLES, rng),
     bottomColor: pick(BOTTOM_COLORS, rng),
     shoeStyle: pick(SHOE_STYLES, rng),

@@ -190,7 +190,7 @@ async function main() {
     `window.__fittingRoom.setSeed(${JSON.stringify(results.checks.defaultSeed)})`,
   );
   await win.webContents.executeJavaScript(
-    `document.querySelectorAll('#tabs button')[0].click()`,
+    `(() => { const b = [...document.querySelectorAll('#tabs button')].find((x) => ['\u4eba\u7269', 'Character'].includes(x.textContent.trim())); if (b) b.click(); })()`,
   );
   results.checks.sliderRows = await win.webContents.executeJavaScript(
     `new Promise((res, rej) => {

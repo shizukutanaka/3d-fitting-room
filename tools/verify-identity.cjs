@@ -1,6 +1,6 @@
 // Headless verification of the identity foundation
 // (docs/PERSPECTIVES-2.md implication 1; docs/DESIGN.md §19):
-//   1. a name set in the character tab rides the seed (FR5-),
+//   1. a name set in the character tab rides the seed (FR6-),
 //      headlines the profile share card, and survives a full
 //      reset via card restore — name included,
 //   2. the roster keeps two people and calls each back by tap,
@@ -100,13 +100,13 @@ async function main() {
   await waitForBridge(win);
   results.checks.frameBytes = await waitForRenderedFrame(win);
 
-  console.log('STEP 1: name a person through the UI; seed becomes FR5');
+  console.log('STEP 1: name a person through the UI; seed becomes FR6');
   await win.webContents.executeJavaScript(
     `window.__fittingRoom.setOutfit(${JSON.stringify(PERSON_A)})`,
   );
   // open the character tab (first tab) and set the name in the field
   await win.webContents.executeJavaScript(
-    `document.querySelectorAll('#tabs button')[0].click()`,
+    `(() => { const b = [...document.querySelectorAll('#tabs button')].find((x) => ['\u4eba\u7269', 'Character'].includes(x.textContent.trim())); if (b) b.click(); })()`,
   );
   await poll(win, `Boolean(document.getElementById('person-name'))`, 10000, 'name field');
   await win.webContents.executeJavaScript(
@@ -125,7 +125,7 @@ async function main() {
   );
   const seedMirai = await win.webContents.executeJavaScript(`window.__fittingRoom.getSeed()`);
   results.checks.seedMirai = seedMirai;
-  results.checks.seedIsV5 = String(seedMirai).startsWith('FR5-');
+  results.checks.seedIsV6 = String(seedMirai).startsWith('FR6-');
   results.checks.rosterAtStart = await win.webContents.executeJavaScript(
     `window.__fittingRoom.getRoster()`,
   );
