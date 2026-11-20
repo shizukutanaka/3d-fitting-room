@@ -6,13 +6,16 @@ import { join } from 'node:path';
 //  1. No money anywhere — no payment, donation, ad or subscription
 //     machinery in the shipped source, not even as an unused hook.
 //  2. The creator holds no user data. The app ships with NO
-//     endpoint: the only network traffic allowed is to the LLM
-//     endpoint the *user* configures on their own device (added
-//     2026-11-20 at mi's explicit instruction — see
-//     docs/DESIGN.md §11 and docs/LLM-CONNECT.md). That exception
-//     is fenced in by the rules below: no hardcoded non-loopback
-//     URLs anywhere, and network calls confined to the single
-//     module that talks to the user's endpoint (src/llm.ts) plus
+//     endpoint: the only network traffic allowed is to the
+//     endpoints the *user* configures on their own device —
+//     their LLM endpoint (added 2026-11-20 at mi's explicit
+//     instruction — see docs/DESIGN.md §13 and
+//     docs/LLM-CONNECT.md) and their image-generation endpoint
+//     (same day, same pattern — see docs/DESIGN.md §18 and
+//     docs/SD-CONNECT.md). Those exceptions are fenced in by
+//     the rules below: no hardcoded non-loopback URLs anywhere,
+//     and network calls confined to the two modules that talk
+//     to the user's endpoints (src/llm.ts, src/imaging.ts) plus
 //     the service worker's same-origin offline cache.
 // If a future change needs another exception, it must argue with
 // mi first and change this test deliberately, in the open.
@@ -39,9 +42,10 @@ const texts = new Map(appFiles.map((f) => [f, readFileSync(f, 'utf8')]));
 const source = [...texts.values()].join('\n');
 
 const isSw = (f: string) => f.endsWith('sw.js');
-const isLlmModule = (f: string) => f.endsWith(join('src', 'llm.ts'));
+const isNetworkModule = (f: string) =>
+  f.endsWith(join('src', 'llm.ts')) || f.endsWith(join('src', 'imaging.ts'));
 
-describe('no money; data goes only to the user-configured endpoint', () => {
+describe('no money; data goes only to the user-configured endpoints', () => {
   it('contains no payment / donation / ads / subscription machinery', () => {
     const banned = [
       'stripe',
@@ -95,13 +99,14 @@ describe('no money; data goes only to the user-configured endpoint', () => {
     }
   });
 
-  it('confines network calls to src/llm.ts and the service worker', () => {
+  it('confines network calls to src/llm.ts, src/imaging.ts and the service worker', () => {
     for (const [file, text] of texts) {
-      if (isSw(file) || isLlmModule(file)) continue;
+      if (isSw(file) || isNetworkModule(file)) continue;
       expect(text, `${file} must not call fetch`).not.toContain('fetch(');
     }
-    // No other network API may appear anywhere, llm.ts included:
-    // the user's endpoint is reached with fetch, or not at all.
+    // No other network API may appear anywhere, the network
+    // modules included: the user's endpoints are reached with
+    // fetch, or not at all.
     for (const pattern of ['XMLHttpRequest', 'sendBeacon', 'new WebSocket', 'EventSource']) {
       expect(source).not.toContain(pattern);
     }

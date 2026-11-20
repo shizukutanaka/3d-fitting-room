@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import { buildAvatar } from './avatar';
 import { applyOutfit } from './items';
 import { createStage } from './scene';
-import { composeShareCard, downloadBlob } from './share';
+import { composeShareCard, composeShareCardFromImage, downloadBlob } from './share';
 import {
   detectLang,
   getLang,
@@ -58,6 +58,16 @@ import {
   type LlmSettings,
 } from './llm';
 import { describeCommandProtocol, executeCommands, validateCommands } from './commands';
+import {
+  buildImagePrompt,
+  generateImg2Img,
+  generateTxt2Img,
+  loadImagingSettings,
+  saveImagingSettings,
+  testImagingConnection,
+  type GeneratedImage,
+  type ImagingSettings,
+} from './imaging';
 
 const LANG_KEY = 'fitting-room.lang.v1';
 const canvas = document.getElementById('gl') as HTMLCanvasElement;
@@ -162,6 +172,22 @@ interface ChatEntry {
   text: string;
 }
 const chatLog: ChatEntry[] = [];
+
+// ---- bring-your-own image generation (docs/SD-CONNECT.md) ----
+// The same pattern as the LLM connection above: the product
+// ships with no endpoint and no model; settings live only in
+// this device's localStorage; nothing is sent until the user
+// configures their own SD server and presses a generate button.
+// The generated image is held in memory together with the seed
+// of the person it was generated from — downloads and cards are
+// how it persists, on purpose: localStorage is the wrong size
+// class for generated images, and the image is the user's
+// content to keep where they like.
+let sdSettings: ImagingSettings = loadImagingSettings();
+let sdBusy = false;
+let sdStatus: { kind: 'ok' | 'ng'; text: string } | null = null;
+let sdExtra = '';
+let sdResult: { dataUrl: string; seed: string } | null = null;
 
 // ---- genetics: synthesize a new person from two seeds ----
 // (CHARACTER-SYSTEM.md §2.5; LEGAL-ETHICS.md judgment J-06.)
@@ -289,6 +315,141 @@ async function onSendChat(): Promise<void> {
   }
   llmBusy = false;
   renderOptions();
+}
+
+function readSdForm(): ImagingSettings {
+  const get = (id: string) =>
+    (document.getElementById(id) as HTMLInputElement | null)?.value.trim() ?? '';
+  return {
+    endpoint: get('sd-endpoint'),
+    apiKey: get('sd-auth'),
+  };
+}
+
+function onSaveSdSettings(): void {
+  const candidate = readSdForm();
+  if (candidate.endpoint && !isValidEndpoint(candidate.endpoint)) {
+    sdStatus = { kind: 'ng', text: t('llm.invalidEndpoint') };
+    renderOptions();
+    return;
+  }
+  sdSettings = candidate;
+  saveImagingSettings(sdSettings);
+  sdStatus = { kind: 'ok', text: t('llm.saved') };
+  renderOptions();
+}
+
+async function onTestSdConnection(): Promise<void> {
+  const candidate = readSdForm();
+  sdBusy = true;
+  sdStatus = { kind: 'ok', text: t('llm.testing') };
+  renderOptions();
+  const result = await testImagingConnection(candidate);
+  sdBusy = false;
+  sdStatus = result.ok
+    ? {
+        kind: 'ok',
+        text: result.models.length
+          ? `${t('llm.testOk')}: ${result.models.join(', ')}`
+          : t('llm.testOk'),
+      }
+    : { kind: 'ng', text: `${t('llm.testFail')}: ${result.error}` };
+  renderOptions();
+}
+
+/** The current rendering as a PNG data URL, downscaled so the
+ *  long side is at most 768px — the img2img input. Rendered
+ *  fresh first, so the capture is what is on screen. */
+function captureStageImage(): { dataUrl: string; width: number; height: number } {
+  stage.renderer.render(stage.scene, stage.camera);
+  const scale = Math.min(1, 768 / Math.max(canvas.width, canvas.height));
+  const w = Math.max(8, Math.round((canvas.width * scale) / 8) * 8);
+  const h = Math.max(8, Math.round((canvas.height * scale) / 8) * 8);
+  const c2 = document.createElement('canvas');
+  c2.width = w;
+  c2.height = h;
+  const ctx = c2.getContext('2d');
+  if (!ctx) throw new Error('2d context unavailable');
+  ctx.drawImage(canvas, 0, 0, w, h);
+  return { dataUrl: c2.toDataURL('image/png'), width: w, height: h };
+}
+
+async function onGenerateSd(mode: 'txt2img' | 'img2img'): Promise<void> {
+  if (sdBusy) return;
+  if (!sdSettings.endpoint) {
+    sdStatus = { kind: 'ng', text: t('sd.notConfigured') };
+    renderOptions();
+    return;
+  }
+  sdBusy = true;
+  sdStatus = { kind: 'ok', text: t('sd.generating') };
+  renderOptions();
+  try {
+    let generated: GeneratedImage;
+    if (mode === 'img2img') {
+      const shot = captureStageImage();
+      const built = buildImagePrompt(outfit, { extra: sdExtra, forImg2Img: true });
+      generated = await generateImg2Img(sdSettings, built, shot.dataUrl, {
+        width: shot.width,
+        height: shot.height,
+      });
+    } else {
+      const built = buildImagePrompt(outfit, { extra: sdExtra });
+      generated = await generateTxt2Img(sdSettings, built);
+    }
+    // The seed is captured now, with the image: the person this
+    // picture depicts is the person as they are at generation
+    // time, whatever the user changes afterwards.
+    sdResult = { dataUrl: generated.dataUrl, seed: encodeSeed(outfit) };
+    sdStatus = { kind: 'ok', text: t('sd.resultTitle') };
+  } catch (err) {
+    sdStatus = {
+      kind: 'ng',
+      text: `${t('llm.error')}: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  sdBusy = false;
+  renderOptions();
+}
+
+function dataUrlToBlob(dataUrl: string): Blob {
+  const comma = dataUrl.indexOf(',');
+  const mime = /data:([^;]+)/.exec(dataUrl.slice(0, comma))?.[1] ?? 'application/octet-stream';
+  const bin = atob(dataUrl.slice(comma + 1));
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
+function onDownloadSdImage(): void {
+  if (!sdResult) return;
+  downloadBlob(dataUrlToBlob(sdResult.dataUrl), '3d-fitting-room-ai.png');
+}
+
+/** The share card for the held generated image — the same
+ *  composition the card button downloads and the bridge serves. */
+async function composeSdCard(): Promise<Blob | null> {
+  if (!sdResult) return null;
+  const result = sdResult;
+  const img = new Image();
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve();
+    img.onerror = () => reject(new Error('generated image could not be loaded'));
+    img.src = result.dataUrl;
+  });
+  return composeShareCardFromImage(img, {
+    appName: t('app.title'),
+    workingTitleNote: t('app.workingTitle'),
+    tagline: t('app.tagline'),
+    seed: result.seed,
+  });
+}
+
+async function onSdCard(): Promise<void> {
+  const blob = await composeSdCard();
+  if (!blob) return;
+  downloadBlob(blob, '3d-fitting-room-card-ai.png');
+  showToast(t('sd.cardSaved'));
 }
 
 function chip(label: string, selected: boolean, onClick: () => void): HTMLButtonElement {
@@ -762,6 +923,76 @@ function renderOptions(): void {
     sendBtn.disabled = llmBusy;
     chatRow.append(chatInput, sendBtn);
     block.append(chatRow);
+
+    // ---- image generation: the user's own SD server ----
+    block.append(el('span', 'group-label', t('sd.settingsTitle')));
+    block.append(
+      formRow('sd.endpoint', 'sd-endpoint', sdSettings.endpoint, 'http://localhost:7860'),
+    );
+    block.append(formRow('sd.auth', 'sd-auth', sdSettings.apiKey, '', 'password'));
+    const sdBtnRow = el('div', 'chat-row');
+    const sdSaveBtn = chip(t('llm.save'), false, onSaveSdSettings);
+    sdSaveBtn.id = 'sd-save';
+    const sdTestBtn = chip(t('llm.test'), false, () => void onTestSdConnection());
+    sdTestBtn.id = 'sd-test';
+    sdTestBtn.disabled = sdBusy;
+    sdBtnRow.append(sdSaveBtn, sdTestBtn);
+    if (sdStatus) {
+      const status = el('span', `llm-status ${sdStatus.kind} sd-status`, sdStatus.text);
+      sdBtnRow.append(status);
+    }
+    block.append(sdBtnRow);
+    block.append(el('p', 'llm-note', t('sd.note')));
+
+    block.append(el('span', 'group-label', t('sd.promptTitle')));
+    const promptPreview = el('textarea', 'sd-prompt');
+    promptPreview.id = 'sd-prompt-preview';
+    promptPreview.readOnly = true;
+    promptPreview.value = buildImagePrompt(outfit, { extra: sdExtra }).prompt;
+    promptPreview.setAttribute('aria-label', t('sd.promptTitle'));
+    block.append(promptPreview);
+    const extraRow = el('div', 'form-row');
+    const extraLabel = el('label', 'form-label', t('sd.extraLabel'));
+    extraLabel.htmlFor = 'sd-extra';
+    const extraInput = el('input', 'form-input');
+    extraInput.id = 'sd-extra';
+    extraInput.type = 'text';
+    extraInput.value = sdExtra;
+    extraInput.placeholder = t('sd.extraPlaceholder');
+    extraInput.autocomplete = 'off';
+    extraInput.addEventListener('input', () => {
+      // Keep the module state (and the prompt preview) current
+      // without a panel re-render, so typing never loses focus.
+      sdExtra = extraInput.value;
+      promptPreview.value = buildImagePrompt(outfit, { extra: sdExtra }).prompt;
+    });
+    extraRow.append(extraLabel, extraInput);
+    block.append(extraRow);
+    const genRow = el('div', 'chat-row');
+    const genImgBtn = chip(t('sd.fromPhoto'), false, () => void onGenerateSd('img2img'));
+    genImgBtn.id = 'sd-gen-img2img';
+    genImgBtn.disabled = sdBusy;
+    const genTxtBtn = chip(t('sd.fromText'), false, () => void onGenerateSd('txt2img'));
+    genTxtBtn.id = 'sd-gen-txt2img';
+    genTxtBtn.disabled = sdBusy;
+    genRow.append(genImgBtn, genTxtBtn);
+    block.append(genRow);
+
+    if (sdResult) {
+      block.append(el('span', 'group-label', t('sd.resultTitle')));
+      const img = el('img', 'sd-result-img');
+      img.id = 'sd-result-img';
+      img.src = sdResult.dataUrl;
+      img.alt = t('sd.resultTitle');
+      block.append(img);
+      const resultRow = el('div', 'chat-row');
+      const dlBtn = chip(t('sd.download'), false, onDownloadSdImage);
+      dlBtn.id = 'sd-download';
+      const cardBtn = chip(t('sd.toCard'), false, () => void onSdCard());
+      cardBtn.id = 'sd-card';
+      resultRow.append(dlBtn, cardBtn);
+      block.append(resultRow);
+    }
     nodes.push(block);
   }
   box.replaceChildren(...nodes);
@@ -950,6 +1181,20 @@ interface FittingRoomBridge {
   };
   /** The command protocol description, generated from the specs. */
   commandSpec(): string;
+  /** Image-generation state for verification: whether an SD
+   *  endpoint is configured, the auto-built prompt for the
+   *  current person and outfit, and whether a generated image is
+   *  being held (with the seed it was generated from). */
+  getSdState(): {
+    configured: boolean;
+    prompt: string;
+    hasResult: boolean;
+    resultSeed: string | null;
+  };
+  /** The share card for the held generated image, as a data
+   *  URL — the same composition the "make a card" button
+   *  downloads. Null when no image is held. */
+  sdCardDataURL(): Promise<string | null>;
 }
 const bridge: FittingRoomBridge = {
   ready: true,
@@ -992,6 +1237,22 @@ const bridge: FittingRoomBridge = {
       bytes: bytes.length,
       seed,
     };
+  },
+  getSdState: () => ({
+    configured: Boolean(sdSettings.endpoint),
+    prompt: buildImagePrompt(outfit, { extra: sdExtra }).prompt,
+    hasResult: sdResult !== null,
+    resultSeed: sdResult?.seed ?? null,
+  }),
+  sdCardDataURL: async () => {
+    const blob = await composeSdCard();
+    if (!blob) return null;
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
   },
   cardDataURL: async () => {
     stage.renderer.render(stage.scene, stage.camera);
