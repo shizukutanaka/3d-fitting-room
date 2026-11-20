@@ -8,7 +8,15 @@
 import * as THREE from 'three';
 import { latheFromProfile, type AvatarRig } from './avatar';
 import { fabricTextures, leatherTextures, ribbedBump } from './textures';
-import type { AccessoryId, GlassesId, HatId, Outfit, TopStyle } from './outfit';
+import type {
+  AccessoryId,
+  BottomStyle,
+  GlassesId,
+  HatId,
+  Outfit,
+  ShoeStyle,
+  TopStyle,
+} from './outfit';
 
 function mesh(geo: THREE.BufferGeometry, material: THREE.Material, x = 0, y = 0, z = 0): THREE.Mesh {
   const m = new THREE.Mesh(geo, material);
@@ -107,6 +115,186 @@ function buildTop(style: TopStyle, cloth: THREE.Material): THREE.Group {
     band.rotation.x = Math.PI / 2;
     band.scale.set(1, 0.8, 1);
     g.add(band);
+  }
+  return g;
+}
+
+// ---------- bottoms (anchor: waist, y=0.95 in frame space) ----------
+// Profiles hang down from the waist anchor and are offset from the
+// pelvis / leg profiles the same way tops are offset from the
+// torso (~11 mm), so they follow height and frame scaling with the
+// body. All styles are plain contemporary garments — no cultural
+// or religious dress, no brand marks (LEGAL-ETHICS G5: J-03/J-09),
+// and the base layer underneath is never touched (J-10). Nothing
+// here evokes a school uniform or a minor (J-11).
+
+/** The hip block shared by pants and shorts: a lathe that wraps
+ *  the pelvis and the tops of the thighs, ending where the leg
+ *  tubes take over. Profiles here are ordered bottom -> top, like
+ *  the body's own lathes (avatar.ts): latheFromProfile's winding
+ *  faces outward only in that order for FrontSide materials. */
+function hipBlock(cloth: THREE.Material): THREE.Mesh {
+  const hip = latheFromProfile(
+    [
+      [0.168, -0.2],
+      [0.18, -0.16],
+      [0.186, -0.11],
+      [0.184, -0.06],
+      [0.172, -0.01],
+      [0.15, 0.045],
+    ],
+    cloth,
+  );
+  hip.scale.set(1, 1, 0.8);
+  return hip;
+}
+
+function legTube(
+  profile: Array<[number, number]>,
+  cloth: THREE.Material,
+  side: number,
+): THREE.Mesh {
+  const leg = latheFromProfile(profile, cloth);
+  leg.position.x = side * 0.096;
+  leg.scale.set(1, 1, 0.92);
+  return leg;
+}
+
+function buildBottom(style: BottomStyle, cloth: THREE.Material): THREE.Group | null {
+  const g = new THREE.Group();
+  switch (style) {
+    case 'none':
+      return null;
+    case 'skirt': {
+      const skirt = latheFromProfile(
+        [
+          [0.232, -0.43],
+          [0.216, -0.33],
+          [0.196, -0.22],
+          [0.182, -0.13],
+          [0.176, -0.065],
+          [0.166, -0.03],
+          [0.147, 0.03],
+        ],
+        cloth,
+      );
+      skirt.scale.set(1, 1, 0.8);
+      g.add(skirt);
+      return g;
+    }
+    case 'pants': {
+      g.add(hipBlock(cloth));
+      // Radii clear the thigh capsule (r 0.067, its cylinder part
+      // reaching down to abs 0.52) by a trouser-like margin; the
+      // first build hugged the knee line and the capsule's lower
+      // dome punched through — measured in the outfit evidence.
+      const legProfile: Array<[number, number]> = [
+        [0.049, -0.905],
+        [0.048, -0.85],
+        [0.052, -0.73],
+        [0.056, -0.6],
+        [0.058, -0.55],
+        [0.068, -0.488],
+        [0.078, -0.45],
+        [0.082, -0.4],
+        [0.084, -0.28],
+        [0.086, -0.17],
+        [0.088, -0.11],
+      ];
+      for (const side of [-1, 1]) g.add(legTube(legProfile, cloth, side));
+      return g;
+    }
+    case 'shorts': {
+      g.add(hipBlock(cloth));
+      const legProfile: Array<[number, number]> = [
+        [0.083, -0.3],
+        [0.084, -0.24],
+        [0.087, -0.17],
+        [0.089, -0.11],
+      ];
+      for (const side of [-1, 1]) g.add(legTube(legProfile, cloth, side));
+      return g;
+    }
+  }
+}
+
+// ---------- shoes (anchor: frame origin; feet at x=±0.096) ----------
+// The avatar has no bare-foot geometry: the legs end at the ankle
+// and footwear completes the foot. 'flats' is the design the
+// avatar originally shipped with, rebuilt here so the outfit owns
+// it. Every style stays inside the original footprint, so no
+// style lifts or shifts the planted foot.
+
+function shoeMaterial(color: string, roughness: number, envMapIntensity = 0.9): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color, roughness, envMapIntensity });
+}
+
+function buildShoes(style: ShoeStyle, color: string): THREE.Group {
+  const g = new THREE.Group();
+  for (const side of [-1, 1]) {
+    const x = side * 0.096;
+    const foot = new THREE.Group();
+    foot.position.set(x, 0, 0.012);
+    g.add(foot);
+    if (style === 'flats' || style === 'boots') {
+      const mat = shoeMaterial(color, style === 'boots' ? 0.5 : 0.32);
+      if (style === 'boots') {
+        const tex = leatherTextures();
+        mat.map = tex.map;
+        mat.bumpMap = tex.bump;
+        mat.bumpScale = 0.4;
+      }
+      foot.add(mesh(new THREE.BoxGeometry(0.072, 0.016, 0.235), mat, 0, 0.008, 0.028));
+      const upper = mesh(new THREE.SphereGeometry(1, 20, 14), mat, 0, 0.026, 0.02);
+      upper.scale.set(0.04, 0.027, 0.105);
+      foot.add(upper);
+      const toe = mesh(new THREE.SphereGeometry(1, 18, 12), mat, 0, 0.019, 0.112);
+      toe.scale.set(0.037, 0.02, 0.045);
+      foot.add(toe);
+      foot.add(mesh(new THREE.BoxGeometry(0.054, 0.028, 0.034), mat, 0, 0.014, -0.07));
+      if (style === 'boots') {
+        // shaft around the shin (leg axis is at z=0, not the
+        // foot group's z offset), plus a cuff ring at the top
+        const shaft = mesh(new THREE.CylinderGeometry(0.058, 0.052, 0.3, 20), mat, x, 0.19, 0);
+        g.add(shaft);
+        const cuff = mesh(new THREE.CylinderGeometry(0.061, 0.06, 0.025, 20), mat, x, 0.345, 0);
+        g.add(cuff);
+      }
+    } else if (style === 'sneakers') {
+      const tex = fabricTextures([2, 2]);
+      const upperMat = new THREE.MeshStandardMaterial({
+        color,
+        map: tex.map,
+        bumpMap: tex.bump,
+        bumpScale: 0.3,
+        roughness: 0.85,
+        envMapIntensity: 0.4,
+      });
+      const soleMat = shoeMaterial('#ece7db', 0.6, 0.5);
+      foot.add(mesh(new THREE.BoxGeometry(0.078, 0.026, 0.245), soleMat, 0, 0.013, 0.028));
+      const upper = mesh(new THREE.SphereGeometry(1, 20, 14), upperMat, 0, 0.036, 0.015);
+      upper.scale.set(0.042, 0.032, 0.108);
+      foot.add(upper);
+      const toe = mesh(new THREE.SphereGeometry(1, 18, 12), upperMat, 0, 0.026, 0.105);
+      toe.scale.set(0.039, 0.022, 0.05);
+      foot.add(toe);
+      foot.add(mesh(new THREE.BoxGeometry(0.06, 0.05, 0.03), upperMat, 0, 0.032, -0.085));
+    } else {
+      // pumps: a wedge silhouette — honest for a planted flat
+      // foot, where a stiletto would float the heel in the air.
+      const patent = shoeMaterial(color, 0.18, 1.2);
+      const wedge = mesh(new THREE.BoxGeometry(0.07, 0.02, 0.23), patent, 0, 0.031, 0.02);
+      // positive rotation.x tips the toe (+z) side down
+      wedge.rotation.x = 0.18;
+      foot.add(wedge);
+      foot.add(mesh(new THREE.BoxGeometry(0.05, 0.05, 0.03), patent, 0, 0.025, -0.075));
+      const toe = mesh(new THREE.SphereGeometry(1, 18, 12), patent, 0, 0.03, 0.07);
+      toe.scale.set(0.038, 0.024, 0.07);
+      foot.add(toe);
+      const cup = mesh(new THREE.SphereGeometry(1, 18, 12), patent, 0, 0.045, -0.06);
+      cup.scale.set(0.036, 0.03, 0.04);
+      foot.add(cup);
+    }
   }
   return g;
 }
@@ -380,6 +568,19 @@ export function applyOutfit(rig: AvatarRig, outfit: Outfit): void {
 
   clearAnchor(rig.torsoAnchor);
   rig.torsoAnchor.add(buildTop(outfit.topStyle, rig.topMaterial));
+
+  // A dress is a one-piece: it already covers waist to knee, so
+  // bottoms are not rendered under it (the selection is kept in
+  // the state and returns when the top changes). The base layer
+  // itself is part of the body and is never removed (J-10).
+  clearAnchor(rig.bottomAnchor);
+  if (outfit.topStyle !== 'dress' && outfit.bottomStyle !== 'none') {
+    const bottom = buildBottom(outfit.bottomStyle, fabricMat(outfit.bottomColor));
+    if (bottom) rig.bottomAnchor.add(bottom);
+  }
+
+  clearAnchor(rig.shoesAnchor);
+  rig.shoesAnchor.add(buildShoes(outfit.shoeStyle, outfit.shoeColor));
 
   clearAnchor(rig.hatAnchor);
   const hat = buildHat(outfit.hat);

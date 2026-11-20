@@ -11,7 +11,14 @@ import {
   sanitizeCharacter,
   skinColorForTone,
 } from '../src/character';
-import { DEFAULT_OUTFIT, loadOutfit, sanitizeOutfit, type Outfit } from '../src/outfit';
+import {
+  BOTTOM_COLORS,
+  DEFAULT_OUTFIT,
+  SHOE_COLORS,
+  loadOutfit,
+  sanitizeOutfit,
+  type Outfit,
+} from '../src/outfit';
 import { decodeSeed, encodeSeed } from '../src/seed';
 
 class FakeStorage implements Storage {
@@ -162,10 +169,14 @@ describe('skin tone mapping', () => {
   });
 });
 
-describe('seed encoding (phase 0, format v2 since phase 2)', () => {
+describe('seed encoding (phase 0, format v3 since bottoms/shoes)', () => {
   const custom: Outfit = {
     topStyle: 'dress',
     topColor: '#3a4152',
+    bottomStyle: 'skirt',
+    bottomColor: BOTTOM_COLORS[3],
+    shoeStyle: 'boots',
+    shoeColor: SHOE_COLORS[1],
     hat: 'ribbon',
     glasses: 'round',
     accessory: 'bag',
@@ -198,6 +209,10 @@ describe('seed encoding (phase 0, format v2 since phase 2)', () => {
     expect(back).not.toBeNull();
     expect(back!.topStyle).toBe('dress');
     expect(back!.topColor).toBe('#3a4152');
+    expect(back!.bottomStyle).toBe('skirt');
+    expect(back!.bottomColor).toBe(BOTTOM_COLORS[3]);
+    expect(back!.shoeStyle).toBe('boots');
+    expect(back!.shoeColor).toBe(SHOE_COLORS[1]);
     expect(back!.hat).toBe('ribbon');
     expect(back!.glasses).toBe('round');
     expect(back!.accessory).toBe('bag');
@@ -255,6 +270,25 @@ describe('seed encoding (phase 0, format v2 since phase 2)', () => {
     expect(back!.character.eyeSize).toBe(DEFAULT_CHARACTER.eyeSize);
     expect(back!.character.faceWidth).toBe(DEFAULT_CHARACTER.faceWidth);
     expect(back!.character.asymmetry).toBe(DEFAULT_CHARACTER.asymmetry);
+    // bottoms and shoes did not exist either: default look
+    expect(back!.bottomStyle).toBe(DEFAULT_OUTFIT.bottomStyle);
+    expect(back!.shoeStyle).toBe(DEFAULT_OUTFIT.shoeStyle);
+    expect(back!.shoeColor).toBe(DEFAULT_OUTFIT.shoeColor);
+  });
+
+  it('still decodes v2 seeds (pre-bottoms format) with default bottoms and shoes', () => {
+    // Hand-built v2 payload: character block, 13 face bytes, then
+    // the outfit block at the v2 indices (19..24).
+    const bytes = [2, 204, 26, 6, 4, 2, ...new Array(13).fill(128), 1, 2, 1, 1, 1, 1];
+    const v2 = `FR2-${Buffer.from(bytes).toString('base64url')}`;
+    const back = decodeSeed(v2);
+    expect(back).not.toBeNull();
+    expect(back!.topStyle).toBe('hoodie');
+    expect(back!.character.height).toBe(1.71);
+    expect(back!.bottomStyle).toBe(DEFAULT_OUTFIT.bottomStyle);
+    expect(back!.bottomColor).toBe(DEFAULT_OUTFIT.bottomColor);
+    expect(back!.shoeStyle).toBe(DEFAULT_OUTFIT.shoeStyle);
+    expect(back!.shoeColor).toBe(DEFAULT_OUTFIT.shoeColor);
   });
 
   it('round-trips the default state and the range extremes', () => {
@@ -328,15 +362,20 @@ describe('seed encoding (phase 0, format v2 since phase 2)', () => {
     // Well-formed base64 of the wrong length / version.
     expect(decodeSeed('FR1-AAAA')).toBeNull();
     expect(decodeSeed('FR2-AAAA')).toBeNull();
+    expect(decodeSeed('FR3-AAAA')).toBeNull();
     // A v2-length payload carrying an unknown version byte.
     const v9 = `FR2-${Buffer.from([9, ...new Array(24).fill(0)]).toString('base64url')}`;
     expect(decodeSeed(v9)).toBeNull();
+    // A v3-length payload carrying the v2 version byte (the
+    // version byte and the length must agree).
+    const mismatched = `FR3-${Buffer.from([2, ...new Array(28).fill(0)]).toString('base64url')}`;
+    expect(decodeSeed(mismatched)).toBeNull();
   });
 
   it('produces a short, recognizable string', () => {
     const seed = encodeSeed(DEFAULT_OUTFIT);
-    expect(seed.startsWith('FR2-')).toBe(true);
-    expect(seed.length).toBeLessThanOrEqual(40);
+    expect(seed.startsWith('FR3-')).toBe(true);
+    expect(seed.length).toBeLessThanOrEqual(48);
   });
 });
 

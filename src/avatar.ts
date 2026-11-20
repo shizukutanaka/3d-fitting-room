@@ -17,8 +17,8 @@
 // were deliberately dropped (see docs/DESIGN.md §9). Lifelikeness
 // comes from subtle automatic blinking, camera-tracking gaze with
 // saccades, and the poses instead.
-// Items attach to named anchors (hat/glasses/neck/torso/bag) so
-// dress-up code never needs the body's internal layout.
+// Items attach to named anchors (hat/glasses/neck/torso/bag/
+// bottom/shoes) so dress-up code never needs the body's layout.
 
 import * as THREE from 'three';
 import { fabricTextures, hairTextures, skinTextures } from './textures';
@@ -38,6 +38,13 @@ export interface AvatarRig {
   neckAnchor: THREE.Group;
   torsoAnchor: THREE.Group;
   bagAnchor: THREE.Group;
+  /** Waist anchor (frame space, y=0.95): bottoms are authored as
+   *  profiles hanging down from here. */
+  bottomAnchor: THREE.Group;
+  /** Frame origin: footwear for both feet is built inside, at the
+   *  feet's x offsets. Shoes live here, not in the body builder,
+   *  so the outfit — not the avatar — owns what is worn. */
+  shoesAnchor: THREE.Group;
   /** Shared material for sleeves; item overlays use it too so a top
    *  always matches its sleeves. Recolored by the outfit. */
   topMaterial: THREE.MeshStandardMaterial;
@@ -282,11 +289,6 @@ export function buildAvatar(character: CharacterParams): AvatarRig {
     envMapIntensity: 0.4,
     side: THREE.DoubleSide,
   });
-  const shoeMat = new THREE.MeshStandardMaterial({
-    color: '#5e2233',
-    roughness: 0.32,
-    envMapIntensity: 0.9,
-  });
   const eyeMat = new THREE.MeshStandardMaterial({
     color: character.eyeColor,
     roughness: 0.12,
@@ -330,25 +332,23 @@ export function buildAvatar(character: CharacterParams): AvatarRig {
   const frame = new THREE.Group();
   root.add(frame);
 
-  // ---- legs & shoes ----
+  // ---- legs ----
+  // The legs end at the ankle cylinder; footwear is an outfit
+  // item (items.ts buildShoes) placed into shoesAnchor, so there
+  // is no bare-foot geometry and no shoe baked into the body.
   for (const side of [-1, 1]) {
     const x = side * 0.096;
     frame.add(mesh(new THREE.CapsuleGeometry(0.067, 0.25, 6, 20), skin, x, 0.645, 0));
     frame.add(mesh(new THREE.SphereGeometry(0.047, 20, 14), skin, x, 0.462, 0.004));
     frame.add(mesh(new THREE.CapsuleGeometry(0.043, 0.26, 6, 18), skin, x, 0.278, 0));
     frame.add(mesh(new THREE.CylinderGeometry(0.031, 0.034, 0.1, 14), skin, x, 0.075, 0));
-    // flat shoe: sole + upper + toe + low heel
-    const shoe = new THREE.Group();
-    shoe.position.set(x, 0, 0.012);
-    const sole = mesh(new THREE.BoxGeometry(0.072, 0.016, 0.235), shoeMat, 0, 0.008, 0.028);
-    const upper = mesh(new THREE.SphereGeometry(1, 20, 14), shoeMat, 0, 0.026, 0.02);
-    upper.scale.set(0.04, 0.027, 0.105);
-    const toe = mesh(new THREE.SphereGeometry(1, 18, 12), shoeMat, 0, 0.019, 0.112);
-    toe.scale.set(0.037, 0.02, 0.045);
-    const heel = mesh(new THREE.BoxGeometry(0.054, 0.028, 0.034), shoeMat, 0, 0.014, -0.07);
-    shoe.add(sole, upper, toe, heel);
-    frame.add(shoe);
   }
+  const shoesAnchor = new THREE.Group();
+  frame.add(shoesAnchor);
+
+  const bottomAnchor = new THREE.Group();
+  bottomAnchor.position.set(0, 0.95, 0);
+  frame.add(bottomAnchor);
 
   // ---- pelvis (base-layer shorts) ----
   const pelvis = mesh(new THREE.SphereGeometry(1, 36, 24), baseFabric, 0, 0.885, 0);
@@ -752,6 +752,8 @@ export function buildAvatar(character: CharacterParams): AvatarRig {
     neckAnchor,
     torsoAnchor,
     bagAnchor,
+    bottomAnchor,
+    shoesAnchor,
     topMaterial,
     applyPose,
     setCharacter,

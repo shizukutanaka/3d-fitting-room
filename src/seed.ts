@@ -15,13 +15,20 @@
 // - v1 ("FR1-", 12 bytes): the phase 0/1 layout — no face
 //   parameters. Still decodable; the face loads with defaults.
 // - v2 ("FR2-", 25 bytes): adds the 13 phase-2 face parameters.
-// Encoding always produces v2.
+//   Still decodable; bottoms and shoes load with defaults.
+// - v3 ("FR3-", 29 bytes): appends bottom style/color and shoe
+//   style/color after the v2 layout, byte for byte.
+// Encoding always produces v3.
 
 import {
   ACCESSORIES,
+  BOTTOM_COLORS,
+  BOTTOM_STYLES,
   GLASSES,
   HATS,
   POSES,
+  SHOE_COLORS,
+  SHOE_STYLES,
   TOP_COLORS,
   TOP_STYLES,
   sanitizeOutfit,
@@ -39,8 +46,10 @@ import {
 
 const PREFIX_V1 = 'FR1-';
 const PREFIX_V2 = 'FR2-';
+const PREFIX_V3 = 'FR3-';
 const BYTE_COUNT_V1 = 12;
 const BYTE_COUNT_V2 = 25;
+const BYTE_COUNT_V3 = 29;
 
 function idx(options: readonly string[], value: string): number {
   const i = options.indexOf(value);
@@ -88,7 +97,7 @@ function dequantizeFace(key: FaceKey, byte: number): number {
 export function encodeSeed(outfit: Outfit): string {
   const c = outfit.character;
   const bytes = [
-    2,
+    3,
     Math.round(clamp(c.skinTone, 0, 1) * 255),
     Math.round((clamp(c.height, HEIGHT_MIN, HEIGHT_MAX) - HEIGHT_MIN) * 100),
     idx(HAIR_COLORS, c.hairColor),
@@ -101,19 +110,26 @@ export function encodeSeed(outfit: Outfit): string {
     idx(GLASSES, outfit.glasses),
     idx(ACCESSORIES, outfit.accessory),
     idx(POSES, outfit.pose),
+    idx(BOTTOM_STYLES, outfit.bottomStyle),
+    idx(BOTTOM_COLORS, outfit.bottomColor),
+    idx(SHOE_STYLES, outfit.shoeStyle),
+    idx(SHOE_COLORS, outfit.shoeColor),
   ];
-  return PREFIX_V2 + bytesToBase64Url(bytes);
+  return PREFIX_V3 + bytesToBase64Url(bytes);
 }
 
 /** Decode a seed back into a full state. Returns null for anything
  *  that is not a well-formed seed of a known version; the payload
  *  still passes through sanitizeOutfit, so even a hand-crafted
  *  byte string can only produce in-range values. A v1 seed yields
- *  the default face (its layout predates face parameters). */
+ *  the default face (its layout predates face parameters); v1 and
+ *  v2 seeds yield the default bottoms and shoes (their layouts
+ *  predate those categories). */
 export function decodeSeed(seed: unknown): Outfit | null {
   if (typeof seed !== 'string') return null;
   let body = seed.trim();
-  if (body.startsWith(PREFIX_V2)) body = body.slice(PREFIX_V2.length);
+  if (body.startsWith(PREFIX_V3)) body = body.slice(PREFIX_V3.length);
+  else if (body.startsWith(PREFIX_V2)) body = body.slice(PREFIX_V2.length);
   else if (body.startsWith(PREFIX_V1)) body = body.slice(PREFIX_V1.length);
   const bytes = base64UrlToBytes(body);
   if (!bytes) return null;
@@ -138,7 +154,10 @@ export function decodeSeed(seed: unknown): Outfit | null {
       },
     });
   }
-  if (bytes[0] === 2 && bytes.length === BYTE_COUNT_V2) {
+  if (
+    (bytes[0] === 2 && bytes.length === BYTE_COUNT_V2) ||
+    (bytes[0] === 3 && bytes.length === BYTE_COUNT_V3)
+  ) {
     const face: Record<string, number> = {};
     FACE_PARAM_KEYS.forEach((key, i) => {
       face[key] = dequantizeFace(key, bytes[6 + i]);
@@ -150,6 +169,17 @@ export function decodeSeed(seed: unknown): Outfit | null {
       glasses: at(GLASSES, 22),
       accessory: at(ACCESSORIES, 23),
       pose: at(POSES, 24),
+      // v3 appends the bottoms/shoes block after the v2 layout;
+      // for v2 these keys are absent and sanitizeOutfit fills the
+      // defaults (no bottoms, the original flats).
+      ...(bytes[0] === 3
+        ? {
+            bottomStyle: at(BOTTOM_STYLES, 25),
+            bottomColor: at(BOTTOM_COLORS, 26),
+            shoeStyle: at(SHOE_STYLES, 27),
+            shoeColor: at(SHOE_COLORS, 28),
+          }
+        : {}),
       character: {
         skinTone: bytes[1] / 255,
         // Round back to whole centimeters so a decoded height is

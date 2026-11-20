@@ -17,9 +17,13 @@ import {
 } from './i18n';
 import {
   ACCESSORIES,
+  BOTTOM_COLORS,
+  BOTTOM_STYLES,
   GLASSES,
   HATS,
   POSES,
+  SHOE_COLORS,
+  SHOE_STYLES,
   TOP_COLORS,
   TOP_STYLES,
   loadOutfit,
@@ -27,6 +31,7 @@ import {
   saveOutfit,
   type Outfit,
 } from './outfit';
+import { extractSeedFromPng } from './cardseed';
 import {
   CHARACTER_PARAM_SPECS,
   EYE_COLORS,
@@ -53,10 +58,20 @@ stage.scene.add(rig.root);
 stage.setSubjectHeight(outfit.character.height);
 applyOutfit(rig, outfit);
 
-type TabId = 'character' | 'tops' | 'hat' | 'glasses' | 'accessory' | 'pose';
+type TabId =
+  | 'character'
+  | 'tops'
+  | 'bottoms'
+  | 'shoes'
+  | 'hat'
+  | 'glasses'
+  | 'accessory'
+  | 'pose';
 const TABS: Array<{ id: TabId; key: I18nKey }> = [
   { id: 'character', key: 'cat.character' },
   { id: 'tops', key: 'cat.tops' },
+  { id: 'bottoms', key: 'cat.bottoms' },
+  { id: 'shoes', key: 'cat.shoes' },
   { id: 'hat', key: 'cat.hat' },
   { id: 'glasses', key: 'cat.glasses' },
   { id: 'accessory', key: 'cat.accessory' },
@@ -301,6 +316,11 @@ function renderOptions(): void {
     });
     applyRow.append(seedInput, applyBtn);
     nodes.push(applyRow);
+    // …or bring a person back from a share-card image file: the
+    // card carries its seed inside the PNG (see cardseed.ts).
+    const cardRow = el('div', 'seed-row');
+    cardRow.append(chip(t('ui.cardLoad'), false, () => cardFileInput.click()));
+    nodes.push(cardRow);
   } else if (activeTab === 'tops') {
     for (const style of TOP_STYLES) {
       nodes.push(
@@ -317,6 +337,46 @@ function renderOptions(): void {
       s.setAttribute('aria-pressed', String(outfit.topColor === color));
       s.setAttribute('aria-label', `${t('ui.color')} ${color}`);
       s.addEventListener('click', () => update({ ...outfit, topColor: color }));
+      nodes.push(s);
+    }
+  } else if (activeTab === 'bottoms') {
+    for (const style of BOTTOM_STYLES) {
+      nodes.push(
+        chip(t(style === 'none' ? 'item.none' : key('bottom', style)), outfit.bottomStyle === style, () =>
+          update({ ...outfit, bottomStyle: style }),
+        ),
+      );
+    }
+    if (outfit.topStyle === 'dress') {
+      // The dress rule (items.ts): a one-piece hides bottoms.
+      nodes.push(el('span', 'group-label', t('ui.dressHidesBottom')));
+    }
+    nodes.push(el('span', 'group-label', t('ui.color')));
+    for (const color of BOTTOM_COLORS) {
+      const s = el('button', 'swatch') as HTMLButtonElement;
+      s.type = 'button';
+      s.style.background = color;
+      s.setAttribute('aria-pressed', String(outfit.bottomColor === color));
+      s.setAttribute('aria-label', `${t('ui.color')} ${color}`);
+      s.addEventListener('click', () => update({ ...outfit, bottomColor: color }));
+      nodes.push(s);
+    }
+  } else if (activeTab === 'shoes') {
+    for (const style of SHOE_STYLES) {
+      nodes.push(
+        chip(t(key('shoe', style)), outfit.shoeStyle === style, () =>
+          update({ ...outfit, shoeStyle: style }),
+        ),
+      );
+    }
+    nodes.push(el('span', 'group-label', t('ui.color')));
+    for (const color of SHOE_COLORS) {
+      const s = el('button', 'swatch') as HTMLButtonElement;
+      s.type = 'button';
+      s.style.background = color;
+      s.setAttribute('aria-pressed', String(outfit.shoeColor === color));
+      s.setAttribute('aria-label', `${t('ui.color')} ${color}`);
+      s.addEventListener('click', () => update({ ...outfit, shoeColor: color }));
       nodes.push(s);
     }
   } else if (activeTab === 'hat') {
@@ -364,6 +424,47 @@ function showToast(message: string): void {
   }, 2000);
 }
 
+// ---- restoring a person from a share-card image ----
+// The card PNG carries the seed in a chunk (cardseed.ts). Dropping
+// the file anywhere on the window, or picking it through the file
+// input in the character tab, rebuilds the person it shows. The
+// file is read on-device only — nothing is uploaded anywhere.
+const cardFileInput = document.createElement('input');
+cardFileInput.type = 'file';
+cardFileInput.accept = 'image/png';
+cardFileInput.hidden = true;
+document.body.appendChild(cardFileInput);
+cardFileInput.addEventListener('change', () => {
+  const file = cardFileInput.files?.[0];
+  cardFileInput.value = '';
+  if (file) void applyCardFile(file);
+});
+
+async function applyCardBytes(bytes: Uint8Array): Promise<boolean> {
+  const seed = extractSeedFromPng(bytes);
+  if (!seed) return false;
+  const decoded = decodeSeed(seed);
+  if (!decoded) return false;
+  update(decoded);
+  return true;
+}
+
+async function applyCardFile(file: File): Promise<void> {
+  try {
+    const ok = await applyCardBytes(new Uint8Array(await file.arrayBuffer()));
+    showToast(ok ? t('ui.cardRestored') : t('ui.cardInvalid'));
+  } catch {
+    showToast(t('ui.cardInvalid'));
+  }
+}
+
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('drop', (e) => {
+  e.preventDefault();
+  const file = e.dataTransfer?.files?.[0];
+  if (file) void applyCardFile(file);
+});
+
 function applyStaticTexts(): void {
   document.getElementById('app-title')!.textContent = t('app.title');
   document.getElementById('working-title')!.textContent = t('app.workingTitle');
@@ -383,6 +484,7 @@ async function exportPhoto(): Promise<void> {
     appName: t('app.title'),
     workingTitleNote: t('app.workingTitle'),
     tagline: t('app.tagline'),
+    seed: encodeSeed(outfit),
   });
   downloadBlob(blob, '3d-fitting-room.png');
   showToast(t('ui.saved'));
@@ -450,6 +552,10 @@ interface FittingRoomBridge {
   getSeed(): string;
   setSeed(seed: string): boolean;
   cardDataURL(): Promise<string>;
+  /** Restore the person from a share-card PNG given as a data
+   *  URL — the same code path as dropping the file on the window.
+   *  Resolves true when a seed was found and applied. */
+  applyCardDataURL(dataUrl: string): Promise<boolean>;
   /** Move the camera to a close-up of the face at an azimuth
    *  angle (degrees, 0 = front). Verification uses it to read the
    *  eyes and gaze; it is equally handy in devtools. */
@@ -472,6 +578,7 @@ const bridge: FittingRoomBridge = {
       appName: t('app.title'),
       workingTitleNote: t('app.workingTitle'),
       tagline: t('app.tagline'),
+      seed: encodeSeed(outfit),
     });
     return new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
@@ -479,6 +586,18 @@ const bridge: FittingRoomBridge = {
       reader.onerror = () => reject(reader.error);
       reader.readAsDataURL(blob);
     });
+  },
+  applyCardDataURL: async (dataUrl) => {
+    const comma = dataUrl.indexOf(',');
+    if (comma < 0) return false;
+    try {
+      const bin = atob(dataUrl.slice(comma + 1));
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return applyCardBytes(bytes);
+    } catch {
+      return false;
+    }
   },
   focusFace: (angleDeg = 0) => {
     const p = new THREE.Vector3();

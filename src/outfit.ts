@@ -5,6 +5,8 @@
 import { DEFAULT_CHARACTER, sanitizeCharacter, type CharacterParams } from './character';
 
 export type TopStyle = 'tee' | 'hoodie' | 'dress';
+export type BottomStyle = 'none' | 'skirt' | 'pants' | 'shorts';
+export type ShoeStyle = 'flats' | 'sneakers' | 'pumps' | 'boots';
 export type HatId = 'none' | 'cap' | 'beanie' | 'catears' | 'ribbon';
 export type GlassesId = 'none' | 'round' | 'square' | 'sunglasses';
 export type AccessoryId = 'none' | 'necklace' | 'scarf' | 'bag';
@@ -13,6 +15,17 @@ export type PoseId = 'stand' | 'wave' | 'cheer' | 'peace' | 'relax';
 export interface Outfit {
   topStyle: TopStyle;
   topColor: string;
+  /** Lower-body garment. 'none' shows only the always-on base
+   *  layer (LEGAL-ETHICS J-10: the base layer is never removed).
+   *  A dress is a one-piece and suppresses bottoms at render time
+   *  (see items.ts) — the selection itself is kept. */
+  bottomStyle: BottomStyle;
+  bottomColor: string;
+  /** Footwear. There is deliberately no 'none': the avatar has no
+   *  bare-foot geometry, and 'flats' reproduces the shoes the
+   *  avatar was originally built with. */
+  shoeStyle: ShoeStyle;
+  shoeColor: string;
   hat: HatId;
   glasses: GlassesId;
   accessory: AccessoryId;
@@ -34,7 +47,34 @@ export const TOP_COLORS = [
   '#3a4152',
 ] as const;
 
+/** Color swatches offered for bottoms (denim first: it is the
+ *  color pants are expected to come in). */
+export const BOTTOM_COLORS = [
+  '#44557a',
+  '#2f3542',
+  '#e8e2d6',
+  '#a83c46',
+  '#7cc7ff',
+  '#8fe3c0',
+  '#ffd166',
+] as const;
+
+/** Color swatches offered for shoes. The first entry is the color
+ *  of the flats the avatar originally shipped with, so the default
+ *  outfit's look is unchanged. */
+export const SHOE_COLORS = [
+  '#5e2233',
+  '#26262b',
+  '#e8e2d6',
+  '#7c4a2d',
+  '#a83c46',
+  '#3d5a80',
+  '#d8b25c',
+] as const;
+
 export const TOP_STYLES: TopStyle[] = ['tee', 'hoodie', 'dress'];
+export const BOTTOM_STYLES: BottomStyle[] = ['none', 'skirt', 'pants', 'shorts'];
+export const SHOE_STYLES: ShoeStyle[] = ['flats', 'sneakers', 'pumps', 'boots'];
 export const HATS: HatId[] = ['none', 'cap', 'beanie', 'catears', 'ribbon'];
 export const GLASSES: GlassesId[] = ['none', 'round', 'square', 'sunglasses'];
 export const ACCESSORIES: AccessoryId[] = ['none', 'necklace', 'scarf', 'bag'];
@@ -43,6 +83,10 @@ export const POSES: PoseId[] = ['stand', 'wave', 'cheer', 'peace', 'relax'];
 export const DEFAULT_OUTFIT: Outfit = {
   topStyle: 'tee',
   topColor: '#ff8fab',
+  bottomStyle: 'none',
+  bottomColor: '#44557a',
+  shoeStyle: 'flats',
+  shoeColor: '#5e2233',
   hat: 'none',
   glasses: 'none',
   accessory: 'none',
@@ -68,6 +112,20 @@ export function sanitizeOutfit(raw: unknown): Outfit {
       typeof o.topColor === 'string' && (TOP_COLORS as readonly string[]).includes(o.topColor)
         ? o.topColor
         : DEFAULT_OUTFIT.topColor,
+    // Saves from before the bottoms/shoes categories have none of
+    // these keys: they load with the defaults, which reproduce the
+    // old look (no bottoms, the original flats).
+    bottomStyle: oneOf(o.bottomStyle, BOTTOM_STYLES, DEFAULT_OUTFIT.bottomStyle),
+    bottomColor:
+      typeof o.bottomColor === 'string' &&
+      (BOTTOM_COLORS as readonly string[]).includes(o.bottomColor)
+        ? o.bottomColor
+        : DEFAULT_OUTFIT.bottomColor,
+    shoeStyle: oneOf(o.shoeStyle, SHOE_STYLES, DEFAULT_OUTFIT.shoeStyle),
+    shoeColor:
+      typeof o.shoeColor === 'string' && (SHOE_COLORS as readonly string[]).includes(o.shoeColor)
+        ? o.shoeColor
+        : DEFAULT_OUTFIT.shoeColor,
     hat: oneOf(o.hat, HATS, DEFAULT_OUTFIT.hat),
     glasses: oneOf(o.glasses, GLASSES, DEFAULT_OUTFIT.glasses),
     accessory: oneOf(o.accessory, ACCESSORIES, DEFAULT_OUTFIT.accessory),
@@ -104,6 +162,10 @@ export function randomOutfit(rng: () => number = Math.random): Outfit {
   return {
     topStyle: pick(TOP_STYLES, rng),
     topColor: pick(TOP_COLORS, rng),
+    bottomStyle: pick(BOTTOM_STYLES, rng),
+    bottomColor: pick(BOTTOM_COLORS, rng),
+    shoeStyle: pick(SHOE_STYLES, rng),
+    shoeColor: pick(SHOE_COLORS, rng),
     hat: pick(HATS, rng),
     glasses: pick(GLASSES, rng),
     accessory: pick(ACCESSORIES, rng),

@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   ACCESSORIES,
+  BOTTOM_COLORS,
+  BOTTOM_STYLES,
   DEFAULT_OUTFIT,
   GLASSES,
   HATS,
   POSES,
+  SHOE_COLORS,
+  SHOE_STYLES,
   TOP_COLORS,
   TOP_STYLES,
   loadOutfit,
@@ -50,6 +54,37 @@ describe('outfit state', () => {
     expect(o.topColor).toBe('#7cc7ff');
   });
 
+  it('sanitizeOutfit keeps valid bottoms and shoes, rejects off-list ones', () => {
+    const o = sanitizeOutfit({
+      bottomStyle: 'pants',
+      bottomColor: '#44557a',
+      shoeStyle: 'sneakers',
+      shoeColor: '#26262b',
+    });
+    expect(o.bottomStyle).toBe('pants');
+    expect(o.bottomColor).toBe('#44557a');
+    expect(o.shoeStyle).toBe('sneakers');
+    expect(o.shoeColor).toBe('#26262b');
+    const bad = sanitizeOutfit({
+      bottomStyle: 'school-uniform',
+      bottomColor: '#123456',
+      shoeStyle: 'barefoot',
+      shoeColor: 'red',
+    });
+    expect(bad.bottomStyle).toBe(DEFAULT_OUTFIT.bottomStyle);
+    expect(bad.bottomColor).toBe(DEFAULT_OUTFIT.bottomColor);
+    expect(bad.shoeStyle).toBe(DEFAULT_OUTFIT.shoeStyle);
+    expect(bad.shoeColor).toBe(DEFAULT_OUTFIT.shoeColor);
+  });
+
+  it('a pre-bottoms save loads with the default bottoms and shoes', () => {
+    const o = sanitizeOutfit({ topStyle: 'hoodie', hat: 'cap' });
+    expect(o.bottomStyle).toBe('none');
+    expect(o.shoeStyle).toBe('flats');
+    // the original flat-shoe color, so the old look is unchanged
+    expect(o.shoeColor).toBe('#5e2233');
+  });
+
   it('save/load round-trips through storage', () => {
     const storage = new FakeStorage();
     const outfit = { ...DEFAULT_OUTFIT, hat: 'ribbon' as const, glasses: 'round' as const };
@@ -71,6 +106,10 @@ describe('outfit state', () => {
       const o = randomOutfit(rng);
       expect(TOP_STYLES).toContain(o.topStyle);
       expect(TOP_COLORS).toContain(o.topColor);
+      expect(BOTTOM_STYLES).toContain(o.bottomStyle);
+      expect(BOTTOM_COLORS).toContain(o.bottomColor);
+      expect(SHOE_STYLES).toContain(o.shoeStyle);
+      expect(SHOE_COLORS).toContain(o.shoeColor);
       expect(HATS).toContain(o.hat);
       expect(GLASSES).toContain(o.glasses);
       expect(ACCESSORIES).toContain(o.accessory);

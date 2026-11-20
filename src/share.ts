@@ -2,8 +2,15 @@
 // the current canvas into a square PNG card with the app name on it,
 // ready to post anywhere. Composition happens on a 2D canvas entirely
 // on-device; nothing is uploaded anywhere.
+//
+// The card is also the character's container file: the seed is
+// embedded in a PNG tEXt chunk (cardseed.ts) so the image itself
+// restores the person, and printed on the card face as the fallback
+// for platforms that re-encode uploads and strip chunks. The card
+// states plainly that the person is fictional (LEGAL-ETHICS J-07).
 
 import { getLang } from './i18n';
+import { embedSeedInPng } from './cardseed';
 
 const CARD_SIZE = 1080;
 
@@ -11,10 +18,14 @@ export interface ShareCardOptions {
   appName: string;
   workingTitleNote: string;
   tagline: string;
+  /** The seed string for this person + outfit: embedded into the
+   *  PNG and printed on the card face. */
+  seed: string;
 }
 
-/** Compose the share card and return it as a PNG blob. */
-export function composeShareCard(
+/** Compose the share card and return it as a PNG blob with the
+ *  seed embedded. */
+export async function composeShareCard(
   glCanvas: HTMLCanvasElement,
   opts: ShareCardOptions,
 ): Promise<Blob> {
@@ -22,7 +33,7 @@ export function composeShareCard(
   card.width = CARD_SIZE;
   card.height = CARD_SIZE;
   const ctx = card.getContext('2d');
-  if (!ctx) return Promise.reject(new Error('2d context unavailable'));
+  if (!ctx) throw new Error('2d context unavailable');
 
   // background: soft vertical gradient
   const grad = ctx.createLinearGradient(0, 0, 0, CARD_SIZE);
@@ -32,9 +43,11 @@ export function composeShareCard(
   ctx.fillRect(0, 0, CARD_SIZE, CARD_SIZE);
 
   // photo area: center-crop the WebGL canvas into a rounded square
-  const photo = 860;
+  // (slightly smaller than the original layout: the footer now also
+  // carries the printed seed and the fictional-person note)
+  const photo = 800;
   const px = (CARD_SIZE - photo) / 2;
-  const py = 56;
+  const py = 44;
   const srcSide = Math.min(glCanvas.width, glCanvas.height);
   const sx = (glCanvas.width - srcSide) / 2;
   const sy = (glCanvas.height - srcSide) / 2;
@@ -53,22 +66,40 @@ export function composeShareCard(
   // title block
   ctx.fillStyle = '#33302a';
   ctx.textAlign = 'center';
-  ctx.font = '700 64px "Hiragino Sans", "Noto Sans JP", sans-serif';
-  ctx.fillText(opts.appName, CARD_SIZE / 2, py + photo + 82);
-  ctx.font = '400 30px "Hiragino Sans", sans-serif';
+  ctx.font = '700 58px "Hiragino Sans", "Noto Sans JP", sans-serif';
+  ctx.fillText(opts.appName, CARD_SIZE / 2, py + photo + 72);
+  ctx.font = '400 28px "Hiragino Sans", sans-serif';
   ctx.fillStyle = '#8a7a63';
   const sub =
     getLang() === 'ja'
       ? `${opts.tagline}（${opts.workingTitleNote}）`
       : `${opts.tagline} (${opts.workingTitleNote})`;
-  ctx.fillText(sub, CARD_SIZE / 2, py + photo + 128);
+  ctx.fillText(sub, CARD_SIZE / 2, py + photo + 114);
 
-  return new Promise((resolve, reject) => {
+  // the seed, printed bare so it can be copied off the image by
+  // eye and pasted into the app when the embedded chunk is gone
+  ctx.font = '600 24px ui-monospace, "SF Mono", Menlo, monospace';
+  ctx.fillStyle = '#6b5d49';
+  ctx.fillText(opts.seed, CARD_SIZE / 2, py + photo + 152);
+
+  // J-07: the person on the card is fictional — say so on the card
+  ctx.font = '400 22px "Hiragino Sans", sans-serif';
+  ctx.fillStyle = '#8a7a63';
+  ctx.fillText(
+    getLang() === 'ja' ? '※この人物は架空のキャラクターです' : '* This character is fictional.',
+    CARD_SIZE / 2,
+    py + photo + 184,
+  );
+
+  const raw = await new Promise<Blob>((resolve, reject) => {
     card.toBlob(
       (blob) => (blob ? resolve(blob) : reject(new Error('PNG encode failed'))),
       'image/png',
     );
   });
+  const bytes = new Uint8Array(await raw.arrayBuffer());
+  const embedded = embedSeedInPng(bytes, opts.seed);
+  return embedded ? new Blob([embedded.buffer as ArrayBuffer], { type: 'image/png' }) : raw;
 }
 
 /** Trigger a download of the blob. Returns the object URL used. */
