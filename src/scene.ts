@@ -9,6 +9,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { fabricTextures, plasterTexture, woodFloorTexture } from './textures';
 import { XR_QUALITY_STEPS, nextXrQualityLevel } from './vr';
 
@@ -61,6 +62,28 @@ function mesh(geo: THREE.BufferGeometry, material: THREE.Material, x = 0, y = 0,
   const m = new THREE.Mesh(geo, material);
   m.position.set(x, y, z);
   return m;
+}
+
+/** Bake a set of already-placed meshes into one merged mesh in
+ *  `root`'s local space (draw-call budget, WORLD-CLASS M2). The
+ *  parts must already sit in root's subtree with their final
+ *  transforms; their world matrices are baked into the merged
+ *  geometry exactly, so the picture does not change — only the
+ *  number of meshes does. The caller removes the original parts
+ *  and adds the returned mesh to root. Only for geometry that
+ *  never moves again: anything re-laid-out at runtime (the
+ *  mirror frame) stays unmerged. */
+function mergeParts(parts: THREE.Mesh[], root: THREE.Object3D, material: THREE.Material): THREE.Mesh {
+  root.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(root.matrixWorld).invert();
+  const geos = parts.map((p) => {
+    const g = p.geometry.clone();
+    g.applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, p.matrixWorld));
+    return g;
+  });
+  const merged = mergeGeometries(geos, false);
+  for (const g of geos) g.dispose();
+  return new THREE.Mesh(merged!, material);
 }
 
 export function createStage(canvas: HTMLCanvasElement): Stage {
@@ -178,58 +201,83 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
   floor.receiveShadow = true;
   scene.add(floor);
 
+  // The four plaster walls share one material and never move,
+  // so they are baked into a single merged mesh (M2 budget);
+  // transforms are baked exactly, so the room is unchanged.
   const backWall = mesh(new THREE.PlaneGeometry(13, 3.8), wallMat, 0, 1.9, -2.6);
-  backWall.receiveShadow = true;
-  scene.add(backWall);
   // Front wall behind the camera: never seen directly, but the
   // mirror reflects it — without it the mirror reflects void and
   // reads as a black hole instead of glass.
   const frontWall = mesh(new THREE.PlaneGeometry(13, 5.4), wallMat, 0, 2.7, 5.5);
   frontWall.rotation.y = Math.PI;
-  frontWall.receiveShadow = true;
-  scene.add(frontWall);
-  scene.add(mesh(new THREE.BoxGeometry(13, 0.09, 0.02), trimMat, 0, 0.045, 5.48));
-  for (const x of [-3.4, -1.7, 0, 1.7, 3.4]) {
-    const strip = mesh(new THREE.BoxGeometry(0.05, 3.2, 0.018), trimMat, x, 1.75, 5.485);
-    strip.rotation.y = Math.PI;
-    scene.add(strip);
-  }
-  // Sconces on the front wall: they exist mainly to give the mirror
-  // something warm to reflect (two glowing points + lit plaster).
-  for (const x of [-1.7, 1.7]) {
-    const glow = new THREE.Mesh(
-      new THREE.SphereGeometry(0.045, 14, 10),
-      new THREE.MeshBasicMaterial({ color: '#ffd9a0' }),
-    );
-    glow.position.set(x, 2.25, 5.42);
-    scene.add(glow);
-    scene.add(mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.1, 8), brass, x, 2.36, 5.44));
-    const pt = new THREE.PointLight('#ffcf99', 2.5, 7, 1.8);
-    pt.position.set(x, 2.25, 5.25);
-    scene.add(pt);
-  }
+  const wallParts = [backWall, frontWall];
   for (const side of [-1, 1]) {
     const wall = mesh(new THREE.PlaneGeometry(10, 3.8), wallMat, side * 4.6, 1.9, 0.6);
     wall.rotation.y = -side * Math.PI * 0.5;
-    wall.receiveShadow = true;
-    scene.add(wall);
-    const base = mesh(new THREE.BoxGeometry(10, 0.09, 0.02), trimMat, side * 4.58, 0.045, 0.6);
-    scene.add(base);
+    wallParts.push(wall);
   }
-  const backBase = mesh(new THREE.BoxGeometry(13, 0.09, 0.02), trimMat, 0, 0.045, -2.58);
-  scene.add(backBase);
+  for (const p of wallParts) scene.add(p);
+  const walls = mergeParts(wallParts, scene, wallMat);
+  walls.receiveShadow = true;
+  for (const p of wallParts) scene.remove(p);
+  scene.add(walls);
   // Ceiling: on the flat screen the camera never looks up past
   // the wall tops, but in VR the user stands *inside* the room
   // and does. A plain plaster slab at wall height closes the
   // room; without it the headset shows the background void.
+  // (Kept separate from the walls: it does not receive shadows.)
   const ceiling = mesh(new THREE.PlaneGeometry(13, 10), wallMat, 0, 3.8, 0.6);
   ceiling.rotation.x = Math.PI / 2;
   scene.add(ceiling);
-  // panel moulding on the back wall + a picture rail
-  for (const x of [-3.4, -1.9, 1.9, 3.4]) {
-    scene.add(mesh(new THREE.BoxGeometry(0.05, 3.2, 0.018), trimMat, x, 1.75, -2.585));
+  // Trim — baseboards, panel moulding, picture rail — is one
+  // material and never moves: merged into a single mesh too.
+  const trimParts: THREE.Mesh[] = [
+    mesh(new THREE.BoxGeometry(13, 0.09, 0.02), trimMat, 0, 0.045, 5.48),
+    mesh(new THREE.BoxGeometry(13, 0.09, 0.02), trimMat, 0, 0.045, -2.58),
+    mesh(new THREE.BoxGeometry(13, 0.05, 0.018), trimMat, 0, 2.95, -2.585),
+  ];
+  for (const x of [-3.4, -1.7, 0, 1.7, 3.4]) {
+    const strip = mesh(new THREE.BoxGeometry(0.05, 3.2, 0.018), trimMat, x, 1.75, 5.485);
+    strip.rotation.y = Math.PI;
+    trimParts.push(strip);
   }
-  scene.add(mesh(new THREE.BoxGeometry(13, 0.05, 0.018), trimMat, 0, 2.95, -2.585));
+  for (const x of [-3.4, -1.9, 1.9, 3.4]) {
+    trimParts.push(mesh(new THREE.BoxGeometry(0.05, 3.2, 0.018), trimMat, x, 1.75, -2.585));
+  }
+  for (const side of [-1, 1]) {
+    // The side baseboards run along the side walls (their length
+    // is the wall's length). They were originally placed
+    // unrotated, which laid them across the floor — mostly hidden
+    // by the podium, but a stray strip on the floorboards.
+    // Rotated onto the wall here, as intended.
+    const base = mesh(new THREE.BoxGeometry(10, 0.09, 0.02), trimMat, side * 4.58, 0.045, 0.6);
+    base.rotation.y = Math.PI / 2;
+    trimParts.push(base);
+  }
+  for (const p of trimParts) scene.add(p);
+  const trim = mergeParts(trimParts, scene, trimMat);
+  for (const p of trimParts) scene.remove(p);
+  scene.add(trim);
+  // Sconces on the front wall: they exist mainly to give the mirror
+  // something warm to reflect (two glowing points + lit plaster).
+  // The glow bulbs merge into one mesh, the brass stems join the
+  // scene-level brass merge at the podium below.
+  const glowMat = new THREE.MeshBasicMaterial({ color: '#ffd9a0' });
+  const glowParts: THREE.Mesh[] = [];
+  const brassParts: THREE.Mesh[] = [];
+  for (const x of [-1.7, 1.7]) {
+    const glow = new THREE.Mesh(new THREE.SphereGeometry(0.045, 14, 10), glowMat);
+    glow.position.set(x, 2.25, 5.42);
+    glowParts.push(glow);
+    brassParts.push(mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.1, 8), brass, x, 2.36, 5.44));
+    const pt = new THREE.PointLight('#ffcf99', 2.5, 7, 1.8);
+    pt.position.set(x, 2.25, 5.25);
+    scene.add(pt);
+  }
+  for (const p of glowParts) scene.add(p);
+  const glows = mergeParts(glowParts, scene, glowMat);
+  for (const p of glowParts) scene.remove(p);
+  scene.add(glows);
 
   // ---- the mirror (a real reflection — it is a fitting room) ----
   const mirror = new Reflector(new THREE.PlaneGeometry(1.5, 2.3), {
@@ -282,20 +330,27 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
   scene.add(podium);
   const inlay = mesh(new THREE.TorusGeometry(1.0, 0.007, 8, 72), brass, 0, 0.118, 0);
   inlay.rotation.x = Math.PI / 2;
-  scene.add(inlay);
+  brassParts.push(inlay);
+  for (const p of brassParts) scene.add(p);
+  const brassMerged = mergeParts(brassParts, scene, brass);
+  for (const p of brassParts) scene.remove(p);
+  scene.add(brassMerged);
 
   // ---- clothing rack prop (left) ----
   const rack = new THREE.Group();
   rack.position.set(-2.35, 0, -1.15);
   rack.rotation.y = 0.45;
+  // The rack's brass (posts, feet, bar, hooks) is merged into
+  // one mesh in rack space; the garments keep their own
+  // materials and stay separate.
+  const rackBrass: THREE.Mesh[] = [];
   for (const side of [-1, 1]) {
-    rack.add(mesh(new THREE.CylinderGeometry(0.016, 0.016, 1.5, 12), brass, side * 0.65, 0.75, 0));
-    const foot = mesh(new THREE.BoxGeometry(0.05, 0.03, 0.55), brass, side * 0.65, 0.015, 0);
-    rack.add(foot);
+    rackBrass.push(mesh(new THREE.CylinderGeometry(0.016, 0.016, 1.5, 12), brass, side * 0.65, 0.75, 0));
+    rackBrass.push(mesh(new THREE.BoxGeometry(0.05, 0.03, 0.55), brass, side * 0.65, 0.015, 0));
   }
   const bar = mesh(new THREE.CylinderGeometry(0.014, 0.014, 1.36, 12), brass, 0, 1.5, 0);
   bar.rotation.z = Math.PI / 2;
-  rack.add(bar);
+  rackBrass.push(bar);
   const garmentColors = ['#97a08a', '#d9cfc0', '#4a4a52'];
   garmentColors.forEach((color, i) => {
     const tex = fabricTextures([1.5, 1.5]);
@@ -309,8 +364,7 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
       side: THREE.DoubleSide,
     });
     const x = -0.4 + i * 0.4;
-    const hook = mesh(new THREE.TorusGeometry(0.035, 0.004, 6, 14, Math.PI), brass, x, 1.5, 0);
-    rack.add(hook);
+    rackBrass.push(mesh(new THREE.TorusGeometry(0.035, 0.004, 6, 14, Math.PI), brass, x, 1.5, 0));
     const garment = new THREE.Mesh(
       new THREE.LatheGeometry(
         [
@@ -328,6 +382,10 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
     garment.castShadow = true;
     rack.add(garment);
   });
+  for (const p of rackBrass) rack.add(p);
+  const rackBrassMerged = mergeParts(rackBrass, rack, brass);
+  for (const p of rackBrass) rack.remove(p);
+  rack.add(rackBrassMerged);
   scene.add(rack);
 
   // ---- plant prop (right) ----
@@ -356,6 +414,11 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
     roughness: 0.7,
     envMapIntensity: 0.4,
   });
+  // The seven leaves share one material and never move: baked
+  // into a single mesh (their pivot transforms are preserved in
+  // the baked geometry).
+  const leafParts: THREE.Mesh[] = [];
+  const leafPivots: THREE.Group[] = [];
   for (let i = 0; i < 7; i++) {
     const leaf = mesh(new THREE.SphereGeometry(1, 12, 8), leafMat, 0, 0.72, 0);
     leaf.scale.set(0.035, 0.17, 0.07);
@@ -365,7 +428,12 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
     pivot.rotation.set(0.5 + (i % 3) * 0.22, (i / 7) * Math.PI * 2, 0);
     pivot.add(leaf);
     plant.add(pivot);
+    leafParts.push(leaf);
+    leafPivots.push(pivot);
   }
+  const leaves = mergeParts(leafParts, plant, leafMat);
+  for (const p of leafPivots) plant.remove(p);
+  plant.add(leaves);
   scene.add(plant);
 
   function resize(): void {
