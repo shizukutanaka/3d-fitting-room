@@ -6,7 +6,7 @@
 // returns a Group positioned for its anchor on the avatar rig.
 
 import * as THREE from 'three';
-import { latheFromProfile, type AvatarRig } from './avatar';
+import { latheFromProfile, mergeStaticParts, type AvatarRig } from './avatar';
 import { bodyRadiusFactor, legGirthFactor, type CharacterParams } from './character';
 import { fabricTextures, leatherTextures, ribbedBump } from './textures';
 import { isDress } from './outfit';
@@ -26,6 +26,51 @@ function mesh(geo: THREE.BufferGeometry, material: THREE.Material, x = 0, y = 0,
   m.position.set(x, y, z);
   m.castShadow = true;
   return m;
+}
+
+/** Bake a built item group's direct mesh children into one
+ *  mesh per material (draw-call budget, WORLD-CLASS M2).
+ *  Builders construct their parts with final local transforms
+ *  and nothing poses them afterwards, so grouping by material
+ *  instance and merging each set of two or more loses nothing
+ *  but draw calls. Nested groups are left alone. Export note:
+ *  garment anchors assign export regions by ancestry, so
+ *  merging inside one item group cannot move a part between
+ *  regions — the shoes anchor is the exception (its L/R split
+ *  reads centroids), which is why buildShoes calls this per
+ *  foot, never across the pair. Accessories stay unmerged:
+ *  the neck anchor's neck/chest split reads centroids too. */
+function mergeChildrenByMaterial(g: THREE.Group): void {
+  const byMaterial = new Map<THREE.Material, THREE.Mesh[]>();
+  for (const child of g.children) {
+    if (child instanceof THREE.Mesh && !Array.isArray(child.material)) {
+      const list = byMaterial.get(child.material) ?? [];
+      list.push(child);
+      byMaterial.set(child.material, list);
+    }
+  }
+  let any = false;
+  for (const list of byMaterial.values()) if (list.length >= 2) any = true;
+  if (!any) return;
+  const out: THREE.Object3D[] = [];
+  const done = new Set<THREE.Material>();
+  for (const child of g.children) {
+    if (
+      child instanceof THREE.Mesh &&
+      !Array.isArray(child.material) &&
+      (byMaterial.get(child.material)?.length ?? 0) >= 2
+    ) {
+      if (!done.has(child.material)) {
+        done.add(child.material);
+        out.push(mergeStaticParts(byMaterial.get(child.material)!, child.material));
+      }
+      // else: this part was folded into the merged mesh above.
+    } else {
+      out.push(child);
+    }
+  }
+  g.clear();
+  for (const o of out) g.add(o);
 }
 
 function fabricMat(color: string, roughness = 0.85): THREE.MeshStandardMaterial {
@@ -194,6 +239,7 @@ function buildTop(style: TopStyle, cloth: THREE.Material, c: CharacterParams): T
     band.scale.set(bandF, 0.8 * bandF, bandF);
     g.add(band);
   }
+  mergeChildrenByMaterial(g);
   return g;
 }
 
@@ -315,6 +361,7 @@ function buildOuter(style: OuterStyle, color: string, c: CharacterParams): THREE
     belt.scale.set(beltF, 0.8 * beltF, beltF);
     g.add(belt);
   }
+  mergeChildrenByMaterial(g);
   return g;
 }
 
@@ -435,6 +482,7 @@ function buildBottom(style: BottomStyle, cloth: THREE.Material, c: CharacterPara
         [0.088, -0.11],
       ];
       for (const side of [-1, 1]) g.add(legTube(legProfile, cloth, side, legGirthFactor(c)));
+      mergeChildrenByMaterial(g);
       return g;
     }
     case 'shorts': {
@@ -446,6 +494,7 @@ function buildBottom(style: BottomStyle, cloth: THREE.Material, c: CharacterPara
         [0.089, -0.11],
       ];
       for (const side of [-1, 1]) g.add(legTube(legProfile, cloth, side, legGirthFactor(c)));
+      mergeChildrenByMaterial(g);
       return g;
     }
   }
@@ -528,7 +577,14 @@ function buildShoes(style: ShoeStyle, color: string): THREE.Group {
       cup.scale.set(0.036, 0.03, 0.04);
       foot.add(cup);
     }
+    // Per foot only: the export splits shoes into shoe.L /
+    // shoe.R by centroid, which a merged pair would lose.
+    mergeChildrenByMaterial(foot);
   }
+  // Boots: the shaft and cuff of each side share that side's
+  // material instance, so this folds each pair — never across
+  // sides, whose materials are separate instances.
+  mergeChildrenByMaterial(g);
   return g;
 }
 

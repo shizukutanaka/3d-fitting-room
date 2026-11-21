@@ -22,6 +22,7 @@
 // bottom/shoes) so dress-up code never needs the body's layout.
 
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { fabricTextures, hairTextures, skinTextures } from './textures';
 import type { PoseId } from './outfit';
 import {
@@ -85,6 +86,33 @@ function mesh(
 ): THREE.Mesh {
   const m = new THREE.Mesh(geo, material);
   m.position.set(x, y, z);
+  m.castShadow = true;
+  return m;
+}
+
+/** Bake same-material parts into a single mesh (draw-call
+ *  budget, WORLD-CLASS M2; the room merge in scene.ts is the
+ *  same idea in world space). Each part's local transform is
+ *  baked into its geometry, so the picture is unchanged — only
+ *  the mesh count drops. The parts are consumed (their
+ *  geometries are disposed). Only for parts that are never
+ *  transformed again after construction, and — because
+ *  export3d.ts assigns each exported mesh to a single skeleton
+ *  joint by the region its centroid falls in — only for parts
+ *  that already share one export region, so the merged
+ *  centroid stays in the same band and the VRM skinning is
+ *  unchanged. */
+export function mergeStaticParts(parts: THREE.Mesh[], material: THREE.Material): THREE.Mesh {
+  const geos = parts.map((p) => {
+    p.updateMatrix();
+    const g = p.geometry.clone();
+    g.applyMatrix4(p.matrix);
+    p.geometry.dispose();
+    return g;
+  });
+  const merged = mergeGeometries(geos, false);
+  for (const g of geos) g.dispose();
+  const m = new THREE.Mesh(merged!, material);
   m.castShadow = true;
   return m;
 }
@@ -215,6 +243,17 @@ function buildHair(style: HairStyleId, hairMat: THREE.Material, faceWidth = 1): 
       g.add(wrap);
       break;
     }
+  }
+  // Every part shares the one hair material and nothing poses
+  // the parts after construction (the whole group is rebuilt
+  // when the style or face width changes), so the style bakes
+  // into a single mesh. Export assigns hair to the head joint
+  // by ancestry, not by centroid, so merging cannot move it
+  // between export regions.
+  const parts = g.children.filter((o): o is THREE.Mesh => o instanceof THREE.Mesh);
+  if (parts.length > 1) {
+    g.clear();
+    g.add(mergeStaticParts(parts, hairMat));
   }
   return g;
 }
@@ -377,13 +416,29 @@ export function buildAvatar(character: CharacterParams): AvatarRig {
     for (const side of [-1, 1]) {
       const x = side * 0.096;
       g.add(mesh(new THREE.CapsuleGeometry(0.067 * thighF, 0.25, 6, 20), skin, x, 0.645, 0));
-      g.add(mesh(new THREE.SphereGeometry(0.047 * legF, 20, 14), skin, x, 0.462, 0.004));
-      g.add(mesh(new THREE.CapsuleGeometry(0.043 * legF, 0.26, 6, 18), skin, x, 0.278, 0));
+      // Knee and calf share one export region (lowerLeg of
+      // that side) and are never posed apart, so they bake
+      // into a single mesh. The thigh capsule (upperLeg) and
+      // the ankle cylinder (foot) stay separate: merging
+      // across region bands would reassign their vertices to
+      // a different skeleton joint in the VRM export.
+      g.add(
+        mergeStaticParts(
+          [
+            mesh(new THREE.SphereGeometry(0.047 * legF, 20, 14), skin, x, 0.462, 0.004),
+            mesh(new THREE.CapsuleGeometry(0.043 * legF, 0.26, 6, 18), skin, x, 0.278, 0),
+          ],
+          skin,
+        ),
+      );
       g.add(
         mesh(new THREE.CylinderGeometry(0.031 * ankleF, 0.034 * ankleF, 0.1, 14), skin, x, 0.075, 0),
       );
     }
-    // pelvis (base-layer shorts)
+    // pelvis (base-layer shorts). The pelvis and both thigh
+    // tubes all fall in the export's single 'hips' region, so
+    // the base shorts bake into one mesh; the torso lathe
+    // stays separate (its own 'torso' region).
     const buildHalf = 1 + (c.build - 1) * 0.4;
     const pelvis = mesh(new THREE.SphereGeometry(1, 36, 24), baseFabric, 0, 0.885, 0);
     pelvis.scale.set(
@@ -391,12 +446,16 @@ export function buildAvatar(character: CharacterParams): AvatarRig {
       0.115 * (1 + (c.build - 1) * 0.15),
       0.128 * (1 + (c.hip - 1) * 0.65) * buildHalf,
     );
-    g.add(pelvis);
-    for (const side of [-1, 1]) {
-      g.add(
-        mesh(new THREE.CylinderGeometry(0.078 * thighF, 0.07 * thighF, 0.13, 20), baseFabric, side * 0.096, 0.8, 0),
-      );
-    }
+    g.add(
+      mergeStaticParts(
+        [
+          pelvis,
+          mesh(new THREE.CylinderGeometry(0.078 * thighF, 0.07 * thighF, 0.13, 20), baseFabric, -0.096, 0.8, 0),
+          mesh(new THREE.CylinderGeometry(0.078 * thighF, 0.07 * thighF, 0.13, 20), baseFabric, 0.096, 0.8, 0),
+        ],
+        baseFabric,
+      ),
+    );
     // torso (base camisole; outfit overlays wrap this)
     const torso = latheFromProfile(
       TORSO_PROFILE.map(([r, y]): [number, number] => [r * bodyRadiusFactor(y, c), y]),
