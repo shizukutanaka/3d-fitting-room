@@ -5,7 +5,7 @@
 **試す**: https://shizukutanaka.github.io/3d-fitting-room/
 Quest のブラウザで開くと、そのまま VR に入れます。フラット画面でも全機能が使えます。
 
-A VR-first 3D fitting room that runs entirely in the browser (WebXR). No installs, no accounts, no ads, and no data ever leaves your device.
+A VR-first 3D fitting room that runs entirely in the browser using WebXR. No installs, no accounts, no ads. Your data never leaves your device.
 
 ## できること
 
