@@ -278,7 +278,7 @@ function buildAccessory(
       g.add(mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(ring, true), 64, tube, 12, true), cloth, 0, 0, 0));
       const front = z + rz + tube;
       const tail = [new THREE.Vector3(0.03, y - 0.03, front)];
-      for (let k = 1; k <= 5; k++) tail.push(onFront(fit, 0.03 + k * 0.002, y - 0.03 - k * 0.026, 0.008));
+      for (let k = 1; k <= 5; k++) tail.push(onFront(fit, 0.03 + k * 0.002, y - 0.03 - k * 0.026, 0.012));
       g.add(mesh(ribbon(tail.map((v) => fit.toNeck(v)), 0.044), cloth, 0, 0, 0));
       return { group: g, anchor: 'neck' };
     }
@@ -311,7 +311,7 @@ function buildAccessory(
       const y1 = sy - 0.03;
       for (let k = 0; k <= 8; k++) {
         const t = k / 8;
-        strap.push(onFront(fit, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, 0.005));
+        strap.push(onFront(fit, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, 0.008));
       }
       strap.push(new THREE.Vector3(x1 - 0.005, sy + 0.006, 0.01), new THREE.Vector3(x1 - 0.01, sy - 0.03, -0.07));
       g.add(mesh(ribbon(strap.map((v) => fit.toBag(v)), 0.016), leather, 0, 0, 0));
