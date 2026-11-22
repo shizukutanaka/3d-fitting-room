@@ -1,36 +1,33 @@
 // Export the current person + outfit as a portable 3D file —
 // glTF binary (.glb) or VRM 1.0 (.vrm). This is the product's
 // discovery engine (docs/PERSPECTIVES.md viewpoint 4): file-based
-// characters historically spread not by their creator's posts but
-// by being adopted as *material* in other people's works (UTAU,
-// MMD), so the export is designed for adoption — (a) format
-// correctness first (a real humanoid bone mapping, a true T-pose,
-// no scale inside the bone hierarchy), (b) the usage terms stated
-// in the metadata, (c) a named-parameter JSON bundled with the
-// file so any tool or LLM can read the person without a seed
-// decoder (viewpoint 5: self-describing artifacts).
+// characters spread by being adopted as *material* in other
+// people's works, so the export is designed for adoption — (a)
+// format correctness first (a real humanoid bone mapping, a true
+// T-pose, no scale inside the bone hierarchy), (b) the usage terms
+// stated in the metadata, (c) a named-parameter JSON bundled with
+// the file (viewpoint 5: self-describing artifacts).
 //
-// How it works: a throwaway rig is built from the outfit (never
-// added to the stage), posed into the VRM T-pose, and snapshotted.
-// Every mesh's world transform is baked into its geometry, and
-// each part is rigidly bound to one bone of a minimal humanoid
-// skeleton constructed at export time — the avatar itself has no
-// bone rig (it is built from anchors and groups), so the skeleton
-// exists only in the exported file. Bone positions come from the
-// rig's real joint anchors (shoulders, elbows, wrists, head) and
-// from the body's design constants (hips, spine, legs), all in
-// export space: feet at y=0, meters, facing +Z.
+// How it works: a throwaway mannequin rig is built from the outfit
+// (never added to the stage), calibrated to the person's height
+// (Body Scale Calibration moves the joints), posed into the VRM
+// T-pose, and snapshotted. Skinned vertices are evaluated through
+// the posed skeleton and baked; the exported skeleton has the same
+// named bones as the mannequin, translation-only, so the file's
+// bind pose is the T-pose and every vertex keeps its smooth
+// four-bone weights. Accessories are rigidly bound to the bone
+// they hang from. Export space: feet at y=0, meters, facing +Z.
 //
-// Honest limits (docs/DESIGN.md §17): the binding is rigid (one
-// bone per part — no smooth skinning, no fingers, no facial
-// bones), and the procedural canvas textures are not embedded.
-// What travels is the silhouette, the colors and a correct
-// humanoid skeleton. The texture maps are near-neutral by design
-// (textures.ts), so the material color that tints them is the
-// visible identity of each part; surface relief does not travel.
+// Honest limits (docs/DESIGN.md §17): no fingers or facial bones,
+// and the baked normal/AO maps and fabric textures are not
+// embedded — what travels is the sculpted silhouette, the garment
+// cut, the colors and a correct, smoothly-weighted skeleton.
+// Only the app's own CC0 mannequins are exported; nothing a user
+// imports is ever written into these files.
 
 import * as THREE from 'three';
-import { buildAvatar, type AvatarRig } from './avatar';
+import { buildAvatar, type AvatarRig, type FigureId } from './avatar';
+import type { LegRatio } from './bodyscale';
 import { applyOutfit } from './items';
 import type { Outfit } from './outfit';
 import {
@@ -41,7 +38,6 @@ import {
   type GlbSkinDef,
 } from './glb';
 import { encodeSeed } from './seed';
-
 /** The license the exported files are released under. The terms
  *  mandated for the export — free use as material in anyone's
  *  works — are exactly CC0's terms, so the deed URL of CC0 1.0 is
@@ -65,124 +61,98 @@ export interface ExportedFile {
   seed: string;
 }
 
-/** Frame-space height bands for the body group's parts (the body
- *  is built in avatar.ts from lathes and capsules whose centers
- *  sit at known heights). x-sign splits the legs; the center parts
- *  (pelvis, torso, neck) have centroid x = 0. */
-function bodyRegion(frameY: number, x: number): string {
-  const side = x < -0.01 ? '.L' : x > 0.01 ? '.R' : '';
-  if (frameY >= 1.38) return 'neck';
-  if (frameY >= 1.0) return 'torso';
-  if (frameY >= 0.7) return 'hips';
-  if (frameY >= 0.52) return `upperLeg${side}`;
-  if (frameY >= 0.14) return `lowerLeg${side}`;
-  return `foot${side}`;
-}
+// Bones written to the file, in this order. The mannequin's tip
+// bones (hand/toe ends) carry no weight and are not humanoid
+// bones, so they stay out of the file.
+const JOINT_NAMES = [
+  'hips', 'spine', 'chest', 'upperChest', 'neck', 'head',
+  'leftShoulder', 'leftUpperArm', 'leftLowerArm', 'leftHand',
+  'rightShoulder', 'rightUpperArm', 'rightLowerArm', 'rightHand',
+  'leftUpperLeg', 'leftLowerLeg', 'leftFoot', 'leftToes',
+  'rightUpperLeg', 'rightLowerLeg', 'rightFoot', 'rightToes',
+] as const;
+const JOINT_INDEX = new Map<string, number>(JOINT_NAMES.map((n, i) => [n, i]));
 
-interface ArmGroups {
-  side: 'L' | 'R';
-  shoulder: THREE.Group;
-  elbow: THREE.Group | null;
-  hand: THREE.Group | null;
-}
-
-/** An arm subtree: the shoulder group holds the upper arm, its
- *  child group is the elbow (forearm), and the elbow's child is
- *  the hand. Regions follow that nesting. */
-function armRegions(shoulder: THREE.Group): Map<THREE.Object3D, string> {
-  const side = shoulder.position.x < 0 ? 'L' : 'R';
-  const regions = new Map<THREE.Object3D, string>();
-  regions.set(shoulder, `upperArm.${side}`);
-  for (const child of shoulder.children) {
-    if (child instanceof THREE.Group) {
-      regions.set(child, `forearm.${side}`);
-      for (const grand of child.children) {
-        if (grand instanceof THREE.Group) regions.set(grand, `hand.${side}`);
-      }
-    }
+/** Nearest exported joint at or above `obj`. */
+function jointOf(obj: THREE.Object3D | null): number {
+  for (let o = obj; o; o = o.parent) {
+    const j = JOINT_INDEX.get(o.name);
+    if (j !== undefined) return j;
   }
-  return regions;
+  return 0;
 }
 
-function findArmGroups(shoulder: THREE.Group): ArmGroups {
-  const side = shoulder.position.x < 0 ? 'L' : 'R';
-  let elbow: THREE.Group | null = null;
-  let hand: THREE.Group | null = null;
-  for (const child of shoulder.children) {
-    if (child instanceof THREE.Group) {
-      elbow = child;
-      for (const grand of child.children) {
-        if (grand instanceof THREE.Group) hand = grand;
-      }
-    }
-  }
-  return { side, shoulder, elbow, hand };
+/** Rotate a bone (in world terms) so the direction from it to
+ *  `child` points along `dir`. */
+function aim(bone: THREE.Object3D, child: THREE.Object3D, dir: THREE.Vector3): void {
+  bone.updateWorldMatrix(true, true);
+  const a = bone.getWorldPosition(new THREE.Vector3());
+  const b = child.getWorldPosition(new THREE.Vector3());
+  const from = b.sub(a).normalize();
+  const delta = new THREE.Quaternion().setFromUnitVectors(from, dir);
+  const world = bone.getWorldQuaternion(new THREE.Quaternion());
+  const parentWorld = bone.parent ? bone.parent.getWorldQuaternion(new THREE.Quaternion()) : new THREE.Quaternion();
+  bone.quaternion.copy(parentWorld.invert().multiply(delta.multiply(world)));
+  bone.updateWorldMatrix(false, true);
 }
 
-interface SnapshotPart extends GlbPartDef {
-  region: string;
+/** Visible all the way up to `top`. */
+function shown(obj: THREE.Object3D, top: THREE.Object3D): boolean {
+  for (let o: THREE.Object3D | null = obj; o && o !== top.parent; o = o.parent) if (!o.visible) return false;
+  return true;
 }
 
 interface Snapshot {
-  parts: SnapshotPart[];
+  parts: GlbPartDef[];
   materials: GlbMaterialDef[];
-  /** World positions of the arm joints and head, in export space. */
-  jointWorld: {
-    head: THREE.Vector3;
-    arms: ArmGroups[];
-  };
-  frameScale: { x: number; y: number };
+  skin: GlbSkinDef;
   rig: AvatarRig;
 }
 
-/** Build a throwaway rig for the outfit, pose it into the VRM
- *  T-pose, and snapshot every mesh with baked world transforms. */
-function snapshotOutfit(outfit: Outfit): Snapshot {
-  const rig = buildAvatar(outfit.character);
+async function snapshotOutfit(outfit: Outfit, figure: FigureId, leg: LegRatio): Promise<Snapshot> {
+  const rig = buildAvatar(outfit.character, figure, leg);
   applyOutfit(rig, outfit);
+  await rig.ready;
   const root = rig.root;
-  const frame = root.children[0];
-  const frameScale = { x: frame?.scale.x || 1, y: frame?.scale.y || 1 };
+  // The fresh rig was never ticked: it stands in its rest pose,
+  // calibrated. Zero the podium offset and raise the arms.
+  root.position.set(0, 0, 0);
+  root.quaternion.identity();
+  root.updateMatrixWorld(true);
+  const bone = (n: string) => root.getObjectByName(n);
+  for (const [side, x] of [['left', 1], ['right', -1]] as const) {
+    const dir = new THREE.Vector3(x, 0, 0);
+    const up = bone(`${side}UpperArm`);
+    const low = bone(`${side}LowerArm`);
+    const hand = bone(`${side}Hand`);
+    if (up && low) aim(up, low, dir);
+    if (low && hand) aim(low, hand, dir);
+  }
+  root.updateMatrixWorld(true);
 
-  // Region lookup: anchors name their subtree; the frame's direct
-  // group children that are neither anchors nor the head are the
-  // body group and the two arm shoulders.
-  const anchorRegion = new Map<THREE.Object3D, string>([
-    [rig.head, 'head'],
-    [rig.hatAnchor, 'hat'],
-    [rig.glassesAnchor, 'glasses'],
-    [rig.torsoAnchor, 'top'],
-    [rig.bottomAnchor, 'bottom'],
-    [rig.neckAnchor, 'neck-item'],
-    [rig.bagAnchor, 'bag'],
-    [rig.shoesAnchor, 'shoes'],
-  ]);
-  const armRegion = new Map<THREE.Object3D, string>();
-  const arms: ArmGroups[] = [];
-  let bodyGroup: THREE.Object3D | null = null;
-  if (frame) {
-    for (const child of frame.children) {
-      if (anchorRegion.has(child) || !(child instanceof THREE.Group)) continue;
-      const hasGroupChild = child.children.some((c) => c instanceof THREE.Group);
-      if (hasGroupChild) {
-        for (const [obj, region] of armRegions(child)) armRegion.set(obj, region);
-        arms.push(findArmGroups(child));
-      } else {
-        bodyGroup = child;
+  const world = JOINT_NAMES.map((n) => {
+    const b = bone(n);
+    return b ? b.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3();
+  });
+  const joints: GlbJointDef[] = JOINT_NAMES.map((n, i) => {
+    const b = bone(n);
+    let parent = -1;
+    for (let o = b?.parent ?? null; o; o = o.parent) {
+      const j = JOINT_INDEX.get(o.name);
+      if (j !== undefined) {
+        parent = j;
+        break;
       }
     }
-  }
-
-  // ---- VRM T-pose ----
-  // The fresh rig stands in the app's neutral pose (arms hanging,
-  // slight elbow bend). The T-pose raises only the upper arms to
-  // horizontal and straightens the elbows — done directly on the
-  // throwaway rig's joint groups, so the baked geometry, the
-  // joint positions and the skeleton all describe the same pose.
-  for (const arm of arms) {
-    arm.shoulder.rotation.set(0, 0, arm.side === 'L' ? -Math.PI / 2 : Math.PI / 2);
-    arm.elbow?.rotation.set(0, 0, 0);
-  }
+    const local = world[i].clone().sub(parent >= 0 ? world[parent] : new THREE.Vector3());
+    return { name: n, parent, translation: [local.x, local.y, local.z] };
+  });
+  // Translation-only bones: each inverse bind matrix is the
+  // negated world translation (column-major).
+  const inverseBindMatrices = new Float32Array(joints.length * 16);
+  world.forEach((p, i) => {
+    inverseBindMatrices.set([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -p.x, -p.y, -p.z, 1], i * 16);
+  });
 
   const materials: GlbMaterialDef[] = [];
   const materialIndex = new Map<THREE.Material, number>();
@@ -191,255 +161,101 @@ function snapshotOutfit(outfit: Outfit): Snapshot {
     if (known !== undefined) return known;
     const std = mat as THREE.MeshStandardMaterial;
     const color = std.color;
-    const def: GlbMaterialDef = {
-      name: `material-${materials.length}`,
-      baseColorFactor: color
-        ? [color.r, color.g, color.b, std.opacity ?? 1]
-        : [1, 1, 1, std.opacity ?? 1],
+    materials.push({
+      name: mat.name || `material-${materials.length}`,
+      baseColorFactor: color ? [color.r, color.g, color.b, std.opacity ?? 1] : [1, 1, 1, std.opacity ?? 1],
       roughnessFactor: std.roughness ?? 1,
       metallicFactor: std.metalness ?? 0,
       alphaMode: std.transparent ? 'BLEND' : 'OPAQUE',
       doubleSided: std.side === THREE.DoubleSide,
-    };
-    materials.push(def);
+    });
     materialIndex.set(mat, materials.length - 1);
     return materials.length - 1;
   };
 
-  const parts: SnapshotPart[] = [];
-  const regionCounts = new Map<string, number>();
-  const center = new THREE.Vector3();
-
-  const emit = (mesh: THREE.Mesh, region: string): void => {
-    const geo = mesh.geometry.clone();
-    geo.applyMatrix4(mesh.matrixWorld);
-    const position = geo.getAttribute('position');
-    if (!position || position.count === 0) return;
-    const normal = geo.getAttribute('normal');
-    const uv = geo.getAttribute('uv');
-    const material = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
-    const n = (regionCounts.get(region) ?? 0) + 1;
-    regionCounts.set(region, n);
-    parts.push({
-      name: `${region}-${n}`,
-      region,
-      positions: position.array,
-      normals: normal ? normal.array : new Float32Array(position.count * 3),
-      uvs: uv ? uv.array : undefined,
-      indices: geo.index ? geo.index.array : undefined,
-      material: materialFor(material),
-    });
-  };
-
-  const centroidOf = (mesh: THREE.Mesh): THREE.Vector3 => {
-    mesh.geometry.computeBoundingBox();
-    const bb = mesh.geometry.boundingBox;
-    if (!bb) return center.set(0, 0, 0);
-    return center.copy(bb.getCenter(new THREE.Vector3())).applyMatrix4(mesh.matrixWorld);
-  };
-
-  const regionOf = (mesh: THREE.Mesh, inherited: string): string => {
-    if (inherited === 'shoes') {
-      const c = centroidOf(mesh);
-      return c.x < 0 ? 'shoe.L' : 'shoe.R';
+  const parts: GlbPartDef[] = [];
+  const v = new THREE.Vector3();
+  root.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh) || !shown(obj, root)) return;
+    const src = obj.geometry as THREE.BufferGeometry;
+    const pos = src.getAttribute('position');
+    if (!pos || pos.count === 0) return;
+    const material = materialFor(Array.isArray(obj.material) ? obj.material[0] : obj.material);
+    const uv = src.getAttribute('uv');
+    const name = obj.name || `part-${parts.length + 1}`;
+    if (obj instanceof THREE.SkinnedMesh) {
+      const baked = new THREE.BufferGeometry();
+      const out = new Float32Array(pos.count * 3);
+      for (let i = 0; i < pos.count; i++) {
+        obj.getVertexPosition(i, v).applyMatrix4(obj.matrixWorld);
+        out.set([v.x, v.y, v.z], i * 3);
+      }
+      baked.setAttribute('position', new THREE.BufferAttribute(out, 3));
+      if (src.index) baked.setIndex(src.index.clone());
+      baked.computeVertexNormals();
+      const si = src.getAttribute('skinIndex');
+      const sw = src.getAttribute('skinWeight');
+      const skinJoints = new Uint8Array(pos.count * 4);
+      const skinWeights = new Float32Array(pos.count * 4);
+      for (let i = 0; i < pos.count; i++) {
+        let sum = 0;
+        for (let k = 0; k < 4; k++) {
+          const w = sw.getComponent(i, k);
+          if (w <= 0) continue;
+          skinJoints[i * 4 + k] = jointOf(obj.skeleton.bones[si.getComponent(i, k)]);
+          skinWeights[i * 4 + k] = w;
+          sum += w;
+        }
+        if (sum > 0) for (let k = 0; k < 4; k++) skinWeights[i * 4 + k] /= sum;
+        else skinWeights[i * 4] = 1;
+      }
+      parts.push({
+        name,
+        positions: out,
+        normals: baked.getAttribute('normal').array,
+        uvs: uv ? uv.array : undefined,
+        indices: src.index ? src.index.array : undefined,
+        material,
+        skinJoints,
+        skinWeights,
+      });
+      baked.dispose();
+    } else {
+      const geo = src.clone();
+      geo.applyMatrix4(obj.matrixWorld);
+      const normal = geo.getAttribute('normal');
+      parts.push({
+        name,
+        positions: geo.getAttribute('position').array,
+        normals: normal ? normal.array : new Float32Array(pos.count * 3),
+        uvs: uv ? uv.array : undefined,
+        indices: geo.index ? geo.index.array : undefined,
+        material,
+        joint: jointOf(obj),
+      });
+      geo.dispose();
     }
-    if (inherited === 'body') {
-      const c = centroidOf(mesh);
-      return bodyRegion(c.y / frameScale.y, c.x);
-    }
-    if (inherited === 'neck-item') {
-      // The necklace drapes onto the chest; the scarf wraps the
-      // neck. Both arrive through the neck anchor — the centroid
-      // height is what separates them.
-      const c = centroidOf(mesh);
-      return c.y / frameScale.y >= 1.4 ? 'neck' : 'chest';
-    }
-    return inherited;
-  };
-
-  const walk = (obj: THREE.Object3D, inherited: string): void => {
-    let region = inherited;
-    const anchored = anchorRegion.get(obj);
-    if (anchored) region = anchored;
-    const armed = armRegion.get(obj);
-    if (armed) region = armed;
-    if (obj === bodyGroup) region = 'body';
-    if (obj instanceof THREE.Mesh) emit(obj, regionOf(obj, region));
-    for (const child of obj.children) walk(child, region);
-  };
-
-  // Zero the podium offset so the exported figure stands on y=0
-  // (the fresh rig was never ticked, so there is no sway to undo).
-  root.position.y = 0;
-  root.updateMatrixWorld(true);
-  walk(root, 'part');
-
-  const jointWorld = {
-    head: rig.head.getWorldPosition(new THREE.Vector3()),
-    arms,
-  };
-  return { parts, materials, jointWorld, frameScale, rig };
+  });
+  return { parts, materials, skin: { joints, inverseBindMatrices }, rig };
 }
 
-/** Release the throwaway rig's geometries, materials and canvas
- *  textures after a snapshot. */
+/** Release the throwaway rig. Skinned meshes share geometry and
+ *  baked maps with the live mannequin (avatar.ts asset cache), so
+ *  only their per-rig materials go; accessories are fully owned. */
 function disposeRig(rig: AvatarRig): void {
-  const materials = new Set<THREE.Material>();
   rig.root.traverse((obj) => {
-    if (obj instanceof THREE.Mesh) {
+    if (!(obj instanceof THREE.Mesh)) return;
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+    if (!(obj instanceof THREE.SkinnedMesh)) {
       obj.geometry.dispose();
-      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-      for (const m of mats) materials.add(m);
+      for (const m of mats) {
+        const std = m as THREE.MeshStandardMaterial;
+        std.map?.dispose();
+        std.bumpMap?.dispose();
+      }
     }
+    for (const m of mats) m.dispose();
   });
-  for (const m of materials) {
-    const std = m as THREE.MeshStandardMaterial;
-    std.map?.dispose();
-    std.bumpMap?.dispose();
-    m.dispose();
-  }
-}
-
-// ---- the skeleton ----
-// Joint indices are fixed by this table; the VRM humanoid mapping
-// below refers to the same order.
-const JOINT = {
-  hips: 0,
-  spine: 1,
-  chest: 2,
-  neck: 3,
-  head: 4,
-  leftUpperArm: 5,
-  leftLowerArm: 6,
-  leftHand: 7,
-  rightUpperArm: 8,
-  rightLowerArm: 9,
-  rightHand: 10,
-  leftUpperLeg: 11,
-  leftLowerLeg: 12,
-  leftFoot: 13,
-  rightUpperLeg: 14,
-  rightLowerLeg: 15,
-  rightFoot: 16,
-} as const;
-
-function jointForRegion(region: string): number {
-  switch (region) {
-    case 'head':
-    case 'hat':
-    case 'glasses':
-      return JOINT.head;
-    case 'neck':
-      return JOINT.neck;
-    case 'chest':
-    case 'top':
-    case 'bag':
-      return JOINT.chest;
-    case 'torso':
-      return JOINT.spine;
-    case 'hips':
-    case 'bottom':
-      return JOINT.hips;
-    case 'upperLeg.L':
-      return JOINT.leftUpperLeg;
-    case 'lowerLeg.L':
-      return JOINT.leftLowerLeg;
-    case 'foot.L':
-    case 'shoe.L':
-      return JOINT.leftFoot;
-    case 'upperLeg.R':
-      return JOINT.rightUpperLeg;
-    case 'lowerLeg.R':
-      return JOINT.rightLowerLeg;
-    case 'foot.R':
-    case 'shoe.R':
-      return JOINT.rightFoot;
-    case 'upperArm.L':
-      return JOINT.leftUpperArm;
-    case 'forearm.L':
-      return JOINT.leftLowerArm;
-    case 'hand.L':
-      return JOINT.leftHand;
-    case 'upperArm.R':
-      return JOINT.rightUpperArm;
-    case 'forearm.R':
-      return JOINT.rightLowerArm;
-    case 'hand.R':
-      return JOINT.rightHand;
-    default:
-      return JOINT.hips;
-  }
-}
-
-/** Construct the minimal humanoid skeleton in export space.
- *  Trunk and leg joints sit at the body's design constants (scaled
- *  by the frame); arm and head joints are read from the T-posed
- *  rig's real anchors. No rotations, no scales anywhere in the
- *  hierarchy — the frame scale is baked into the geometry and the
- *  joint positions instead, as the VRM T-pose spec recommends. */
-function buildSkin(snap: Snapshot): GlbSkinDef {
-  const sx = snap.frameScale.x;
-  const sy = snap.frameScale.y;
-  const v = (x: number, y: number, z: number): THREE.Vector3 => new THREE.Vector3(x, y, z);
-  const world: THREE.Vector3[] = new Array(17);
-  world[JOINT.hips] = v(0, 0.92 * sy, 0);
-  world[JOINT.spine] = v(0, 1.08 * sy, 0);
-  world[JOINT.chest] = v(0, 1.26 * sy, 0);
-  world[JOINT.neck] = v(0, 1.44 * sy, 0);
-  world[JOINT.head] = snap.jointWorld.head.clone();
-  world[JOINT.leftUpperLeg] = v(-0.096 * sx, 0.8 * sy, 0);
-  world[JOINT.leftLowerLeg] = v(-0.096 * sx, 0.47 * sy, 0);
-  world[JOINT.leftFoot] = v(-0.096 * sx, 0.1 * sy, 0);
-  world[JOINT.rightUpperLeg] = v(0.096 * sx, 0.8 * sy, 0);
-  world[JOINT.rightLowerLeg] = v(0.096 * sx, 0.47 * sy, 0);
-  world[JOINT.rightFoot] = v(0.096 * sx, 0.1 * sy, 0);
-  for (const arm of snap.jointWorld.arms) {
-    const upper = arm.side === 'L' ? JOINT.leftUpperArm : JOINT.rightUpperArm;
-    const lower = arm.side === 'L' ? JOINT.leftLowerArm : JOINT.rightLowerArm;
-    const hand = arm.side === 'L' ? JOINT.leftHand : JOINT.rightHand;
-    world[upper] = arm.shoulder.getWorldPosition(new THREE.Vector3());
-    if (arm.elbow) world[lower] = arm.elbow.getWorldPosition(new THREE.Vector3());
-    if (arm.hand) world[hand] = arm.hand.getWorldPosition(new THREE.Vector3());
-    // Fallbacks keep the chain well-formed even if a group was
-    // not found (defensive; the current rig always has all three).
-    if (!world[lower]) world[lower] = world[upper].clone().add(v(arm.side === 'L' ? -0.27 * sx : 0.27 * sx, 0, 0));
-    if (!world[hand]) world[hand] = world[lower].clone().add(v(arm.side === 'L' ? -0.26 * sx : 0.26 * sx, 0, 0));
-  }
-
-  const defs: Array<{ name: string; parent: number }> = [
-    { name: 'hips', parent: -1 },
-    { name: 'spine', parent: JOINT.hips },
-    { name: 'chest', parent: JOINT.spine },
-    { name: 'neck', parent: JOINT.chest },
-    { name: 'head', parent: JOINT.neck },
-    { name: 'leftUpperArm', parent: JOINT.chest },
-    { name: 'leftLowerArm', parent: JOINT.leftUpperArm },
-    { name: 'leftHand', parent: JOINT.leftLowerArm },
-    { name: 'rightUpperArm', parent: JOINT.chest },
-    { name: 'rightLowerArm', parent: JOINT.rightUpperArm },
-    { name: 'rightHand', parent: JOINT.rightLowerArm },
-    { name: 'leftUpperLeg', parent: JOINT.hips },
-    { name: 'leftLowerLeg', parent: JOINT.leftUpperLeg },
-    { name: 'leftFoot', parent: JOINT.leftLowerLeg },
-    { name: 'rightUpperLeg', parent: JOINT.hips },
-    { name: 'rightLowerLeg', parent: JOINT.rightUpperLeg },
-    { name: 'rightFoot', parent: JOINT.rightLowerLeg },
-  ];
-  const joints: GlbJointDef[] = defs.map((def, i) => {
-    const parentWorld = def.parent >= 0 ? world[def.parent] : new THREE.Vector3();
-    const local = world[i].clone().sub(parentWorld);
-    return { name: def.name, parent: def.parent, translation: [local.x, local.y, local.z] };
-  });
-  // Bones carry translations only, so each inverse bind matrix is
-  // the negated world translation (column-major).
-  const inverseBindMatrices = new Float32Array(joints.length * 16);
-  world.forEach((p, i) => {
-    inverseBindMatrices.set(
-      [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, -p.x, -p.y, -p.z, 1],
-      i * 16,
-    );
-  });
-  return { joints, inverseBindMatrices };
 }
 
 /** The self-description bundled into every exported file: the
@@ -459,23 +275,21 @@ function fittingRoomExtras(outfit: Outfit, seed: string): Record<string, unknown
 
 const GENERATOR = '3D Fitting Room (working title) — on-device glTF/VRM exporter';
 
-function buildExport(outfit: Outfit, vrm: boolean): ExportedFile {
-  const snap = snapshotOutfit(outfit);
+async function buildExport(outfit: Outfit, vrm: boolean, figure: FigureId, leg: LegRatio): Promise<ExportedFile> {
+  const snap = await snapshotOutfit(outfit, figure, leg);
   try {
-    const skin = buildSkin(snap);
-    const parts: GlbPartDef[] = snap.parts.map((part) => ({
-      ...part,
-      joint: jointForRegion(part.region),
-    }));
+    const { parts, materials, skin } = snap;
     const seed = encodeSeed(outfit);
     const extras = fittingRoomExtras(outfit, seed);
     if (!vrm) {
-      const bytes = buildGlb(parts, snap.materials, { generator: GENERATOR, extras, skin });
+      const bytes = buildGlb(parts, materials, { generator: GENERATOR, extras, skin });
       return { bytes, parts: parts.length, seed };
     }
     const humanBones: Record<string, { node: number }> = {};
-    for (const [name, idx] of Object.entries(JOINT)) humanBones[name] = { node: idx };
-    const bytes = buildGlb(parts, snap.materials, {
+    JOINT_NAMES.forEach((name, idx) => {
+      humanBones[name] = { node: idx };
+    });
+    const bytes = buildGlb(parts, materials, {
       generator: GENERATOR,
       extras,
       skin,
@@ -488,7 +302,7 @@ function buildExport(outfit: Outfit, vrm: boolean): ExportedFile {
             version: '1.0',
             authors: ['3D Fitting Room (working title)'],
             copyrightInformation:
-              'A fictional character, generated procedurally on-device by the 3D Fitting Room app. Free to use as material in your own works under CC0 1.0 (see licenseUrl).',
+              'A fictional adult character, built on-device by the 3D Fitting Room app from its CC0 mannequins. Free to use as material in your own works under CC0 1.0 (see licenseUrl).',
             licenseUrl: EXPORT_LICENSE_URL,
             // Some tools (e.g. the Blender VRM addon) surface otherLicenseUrl
             // rather than licenseUrl; mirror the same CC0 deed so the terms
@@ -514,14 +328,14 @@ function buildExport(outfit: Outfit, vrm: boolean): ExportedFile {
   }
 }
 
-/** The person + outfit as a glTF binary file: T-posed, boned,
- *  self-describing. */
-export function exportGlb(outfit: Outfit): ExportedFile {
-  return buildExport(outfit, false);
+/** The person + outfit as a glTF binary file: T-posed, smoothly
+ *  skinned, self-describing. */
+export function exportGlb(outfit: Outfit, figure: FigureId = 'a', leg: LegRatio = 'standard'): Promise<ExportedFile> {
+  return buildExport(outfit, false, figure, leg);
 }
 
 /** The person + outfit as a VRM 1.0 file: the same payload plus
  *  the VRMC_vrm humanoid mapping and license metadata. */
-export function exportVrm(outfit: Outfit): ExportedFile {
-  return buildExport(outfit, true);
+export function exportVrm(outfit: Outfit, figure: FigureId = 'a', leg: LegRatio = 'standard'): Promise<ExportedFile> {
+  return buildExport(outfit, true, figure, leg);
 }

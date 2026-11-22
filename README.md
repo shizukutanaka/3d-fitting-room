@@ -11,7 +11,8 @@ A VR-first 3D fitting room that runs entirely in the browser using WebXR. No ins
 
 - VR（WebXR）の中で、等身大のアバターへ光線でそのまま着せ替え
 - トップス／アウター／ボトムス／靴／帽子／メガネ／アクセサリーと、名前付きコーデの保存
-- 人物の調整（肌色・身長・髪・顔・体型は連続パラメータ）と、遺伝合成・変異
+- 試着マネキン（体型A／B、CC0の彫刻素体から作成）と、身体スケール校正（任意。既定は身長170 cm。自分の身長・脚の比率・VRの世界スケールを入れると、関節位置ごと等身大に合わせる。後からいつでも変更可）
+- 服の丈を体の目印で表示（例「膝上 5 cm」）
 - 人物とコーデをシード付き写真カードで持ち帰り、そのまま完全復元
 - GLB／VRM 1.0 書き出し（three-vrm／Blender／Godot で開けることを実測済み）
 - 自分の LLM／画像生成エンドポイントへの接続（任意。接続先とキーは端末内のみ）
@@ -36,7 +37,7 @@ npm test        # テスト
 npm run build   # 本番ビルド（dist/）
 ```
 
-設計の正本は `docs/DESIGN.md`、世界水準の物差しは `docs/WORLD-CLASS.md`、法律・倫理の判定記録は `docs/LEGAL-ETHICS.md` にあります。
+マネキン素材の作り方と出所は `tools/avatar-pipeline/README.md`。設計の正本は `docs/DESIGN.md`、世界水準の物差しは `docs/WORLD-CLASS.md`、法律・倫理の判定記録は `docs/LEGAL-ETHICS.md` にあります。
 
 ## License
 
