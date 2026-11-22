@@ -168,7 +168,8 @@ describe('wardrobe on the skinned mannequin (GLB garments, bone calibration)', {
       rig.root.updateMatrixWorld(true);
       const y = (name: string) => {
         const o = rig.root.getObjectByName(name);
-        return o ? o.getWorldPosition(new THREE.Vector3()).y : NaN;
+        // heights from the podium top the mannequin stands on
+        return o ? o.getWorldPosition(new THREE.Vector3()).y - rig.root.position.y : NaN;
       };
       // Knee joint at ~0.28H, hip joint just above the 0.47H inseam.
       expect(y('leftLowerLeg') / height).toBeCloseTo(0.28, 1);
@@ -180,6 +181,55 @@ describe('wardrobe on the skinned mannequin (GLB garments, bone calibration)', {
       top.computeBoundingBox();
       box.copy(top.boundingBox!).applyMatrix4(top.matrixWorld);
       expect(Number.isFinite(box.max.y)).toBe(true);
+    }
+  });
+
+  it('the mannequin stands on the podium and no garment dips inside the body', async () => {
+    const rig = buildAvatar(DEFAULT_OUTFIT.character);
+    applyOutfit(rig, DEFAULT_OUTFIT);
+    await rig.ready;
+    rig.root.updateMatrixWorld(true);
+    const meshes = new Map<string, THREE.SkinnedMesh>();
+    rig.root.traverse((o) => {
+      const m = o as THREE.SkinnedMesh;
+      if (m.isSkinnedMesh) meshes.set(m.name, m);
+    });
+    const body = [...meshes].filter(([n]) => !n.startsWith('G_')).map(([, m]) => m);
+    let minY = Infinity;
+    const bp: number[] = [];
+    const bn: number[] = [];
+    const v = new THREE.Vector3();
+    for (const m of body) {
+      const pos = m.geometry.getAttribute('position');
+      const nor = m.geometry.getAttribute('normal');
+      for (let i = 0; i < pos.count; i++) {
+        minY = Math.min(minY, m.getVertexPosition(i, v).applyMatrix4(m.matrixWorld).y);
+        bp.push(pos.getX(i), pos.getY(i), pos.getZ(i));
+        bn.push(nor.getX(i), nor.getY(i), nor.getZ(i));
+      }
+    }
+    // podium top surface is y = 0.12 (scene.ts)
+    expect(minY).toBeGreaterThan(0.115);
+    expect(minY).toBeLessThan(0.13);
+    // Bind-pose gap to the nearest body vertex, along its normal.
+    for (const g of ['G_base', 'G_tee', 'G_shorts', 'G_pants', 'G_hoodie', 'G_dress']) {
+      const pos = meshes.get(g)!.geometry.getAttribute('position');
+      let minGap = Infinity;
+      for (let i = 0; i < pos.count; i++) {
+        const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+        let best = Infinity;
+        let bi = 0;
+        for (let j = 0; j < bp.length / 3; j++) {
+          const d = (x - bp[3 * j]) ** 2 + (y - bp[3 * j + 1]) ** 2 + (z - bp[3 * j + 2]) ** 2;
+          if (d < best) {
+            best = d;
+            bi = j;
+          }
+        }
+        const gap = (x - bp[3 * bi]) * bn[3 * bi] + (y - bp[3 * bi + 1]) * bn[3 * bi + 1] + (z - bp[3 * bi + 2]) * bn[3 * bi + 2];
+        minGap = Math.min(minGap, gap);
+      }
+      expect(minGap, g).toBeGreaterThan(0.0025);
     }
   });
 

@@ -1151,6 +1151,45 @@ function renderOptions(): void {
     heightRow.append(el('span', 'slider-label', t('ui.height')), height, heightVal);
     nodes.push(heightRow);
 
+    // Body Scale Calibration: mannequin figure, leg ratio, VR trim
+    // and the worn hems against body landmarks (bodyscale.ts).
+    nodes.push(el('span', 'group-label', t('calib.figure')));
+    for (const f of FIGURES) {
+      nodes.push(
+        chip(t(f === 'a' ? 'calib.figureA' : 'calib.figureB'), rig.figure() === f, () => {
+          try {
+            localStorage.setItem(FIGURE_KEY, f);
+          } catch {
+            // storage disabled: the choice lasts for this visit
+          }
+          void rig.setBody(f, calibration.legRatio).then(() => renderOptions());
+        }),
+      );
+    }
+    nodes.push(el('span', 'group-label', t('calib.leg')));
+    for (const l of LEG_RATIOS) {
+      nodes.push(
+        chip(t(`calib.leg.${l}`), calibration.legRatio === l, () => {
+          setCalibration({ legRatio: l });
+          void rig.setBody(rig.figure(), l).then(() => renderOptions());
+        }),
+      );
+    }
+    nodes.push(
+      rangeRow(t('calib.worldScale'), calibration.worldScale, WORLD_SCALE_MIN, WORLD_SCALE_MAX, (v) => `${Math.round(v * 100)}%`, (v) =>
+        setCalibration({ worldScale: v }),
+      ),
+    );
+    const lengths = rig.garmentLengths();
+    if (lengths.length) {
+      nodes.push(el('span', 'group-label', t('calib.lengths')));
+      for (const g of lengths) {
+        const cmTxt = g.label.cm === 0 ? '±0' : `${g.label.cm > 0 ? '+' : ''}${g.label.cm}`;
+        const name = t(key(g.slot, g.style));
+        nodes.push(el('span', 'length-note', `${name}: ${t(`lm.${g.label.landmark}` as I18nKey)} ${cmTxt} cm`));
+      }
+    }
+
     // body: the phase-3 silhouette parameters (CHARACTER-SYSTEM.md
     // §5.8 priority 4). Same spec-driven rows as the face; labels
     // name shapes only — no gender wording (LEGAL-ETHICS.md

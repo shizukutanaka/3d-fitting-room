@@ -143,7 +143,15 @@ body {
   flex-wrap: wrap;
   gap: 8px;
   min-height: 42px;
+  max-height: min(52vh, 480px);
+  overflow-y: auto;
   align-items: center;
+}
+
+.length-note {
+  flex: 1 0 100%;
+  font-size: 12.5px;
+  color: var(--ink-soft);
 }
 
 .chip {

@@ -198,10 +198,138 @@ function loadFigure(id: FigureId): Promise<FigureAsset> {
       new GLTFLoader().loadAsync(`${base}.glb`),
       tex(`${base}-normal.webp`, false),
       tex(`${base}-ao.webp`, false),
-    ]).then(([gltf, normal, ao]) => ({ scene: gltf.scene, normal, ao }));
+    ]).then(([gltf, normal, ao]) => {
+      keepGarmentsOutside(gltf.scene);
+      return { scene: gltf.scene, normal, ao };
+    });
     assetCache.set(id, p);
   }
   return p;
+}
+
+const PODIUM_TOP = 0.12;
+
+/** Minimum gap (m) between each garment and the body surface. */
+function garmentClearance(id: string): number {
+  if (id === 'base' || id.startsWith('shoes') || id === 'sneakers' || id === 'boots') return 0.003;
+  if (id === 'jacket' || id === 'cardigan' || id === 'coat') return 0.008;
+  return 0.005;
+}
+
+/** The pipeline smooths each garment after cutting it from the body,
+ *  which pulls convex areas (hips, shoulders, toes) inside the skin.
+ *  Push every garment vertex back out along the nearest body normal
+ *  so the body never shows through, in bind pose (the garments share
+ *  the body's weights, so the gap holds when posed or calibrated). */
+export function keepGarmentsOutside(scene: THREE.Object3D): void {
+  scene.updateMatrixWorld(true);
+  const CELL = 0.04;
+  const grid = new Map<string, number[]>();
+  const bp: number[] = [];
+  const bn: number[] = [];
+  const garments: [THREE.Mesh, string][] = [];
+  const v = new THREE.Vector3();
+  const n = new THREE.Vector3();
+  const nm = new THREE.Matrix3();
+  scene.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const gname = o.name.startsWith('G_') ? o.name : o.parent?.name.startsWith('G_') ? o.parent.name : null;
+    if (gname) {
+      garments.push([m, gname.slice(2)]);
+      return;
+    }
+    const pos = m.geometry.getAttribute('position');
+    const nor = m.geometry.getAttribute('normal');
+    if (!nor) return;
+    nm.getNormalMatrix(m.matrixWorld);
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
+      n.fromBufferAttribute(nor, i).applyMatrix3(nm).normalize();
+      const k = bp.length / 3;
+      bp.push(v.x, v.y, v.z);
+      bn.push(n.x, n.y, n.z);
+      const key = `${Math.floor(v.x / CELL)},${Math.floor(v.y / CELL)},${Math.floor(v.z / CELL)}`;
+      const cell = grid.get(key);
+      if (cell) cell.push(k);
+      else grid.set(key, [k]);
+    }
+  });
+  const inv = new THREE.Matrix4();
+  for (const [m, id] of garments) {
+    const clear = garmentClearance(id);
+    const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute;
+    if (!/^(shoes|sneakers|boots)/.test(id)) collapseSpikes(m.geometry);
+    inv.copy(m.matrixWorld).invert();
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
+      const cx = Math.floor(v.x / CELL);
+      const cy = Math.floor(v.y / CELL);
+      const cz = Math.floor(v.z / CELL);
+      let best = Infinity;
+      let bi = -1;
+      for (let dx = -1; dx <= 1; dx++)
+        for (let dy = -1; dy <= 1; dy++)
+          for (let dz = -1; dz <= 1; dz++) {
+            const cell = grid.get(`${cx + dx},${cy + dy},${cz + dz}`);
+            if (!cell) continue;
+            for (const k of cell) {
+              const ex = v.x - bp[3 * k];
+              const ey = v.y - bp[3 * k + 1];
+              const ez = v.z - bp[3 * k + 2];
+              const d = ex * ex + ey * ey + ez * ez;
+              if (d < best) {
+                best = d;
+                bi = k;
+              }
+            }
+          }
+      if (bi < 0) continue;
+      const nx = bn[3 * bi];
+      const ny = bn[3 * bi + 1];
+      const nz = bn[3 * bi + 2];
+      const gap = (v.x - bp[3 * bi]) * nx + (v.y - bp[3 * bi + 1]) * ny + (v.z - bp[3 * bi + 2]) * nz;
+      if (gap >= clear) continue;
+      const push = clear - gap;
+      v.set(v.x + nx * push, v.y + ny * push, v.z + nz * push).applyMatrix4(inv);
+      pos.setXYZ(i, v.x, v.y, v.z);
+    }
+    pos.needsUpdate = true;
+    m.geometry.computeBoundingSphere();
+  }
+}
+
+/** Fold back stray vertices left by the pipeline's bisect/join steps:
+ *  a vertex whose every edge is long (> 10 cm, against a 1–2 cm
+ *  garment mesh) is a spike, so it moves to the centroid of its
+ *  neighbours and its triangles collapse. */
+function collapseSpikes(geo: THREE.BufferGeometry): void {
+  const index = geo.getIndex();
+  if (!index) return;
+  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+  const minEdge = new Float32Array(pos.count).fill(Infinity);
+  const nbrs: number[][] = Array.from({ length: pos.count }, () => []);
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  for (let t = 0; t < index.count; t += 3) {
+    const tri = [index.getX(t), index.getX(t + 1), index.getX(t + 2)];
+    for (let e = 0; e < 3; e++) {
+      const i = tri[e];
+      const j = tri[(e + 1) % 3];
+      const l = a.fromBufferAttribute(pos, i).distanceTo(b.fromBufferAttribute(pos, j));
+      if (l < minEdge[i]) minEdge[i] = l;
+      if (l < minEdge[j]) minEdge[j] = l;
+      nbrs[i].push(j);
+      nbrs[j].push(i);
+    }
+  }
+  for (let i = 0; i < pos.count; i++) {
+    if (!(minEdge[i] > 0.1) || minEdge[i] === Infinity) continue;
+    a.set(0, 0, 0);
+    for (const j of nbrs[i]) a.add(b.fromBufferAttribute(pos, j));
+    a.divideScalar(nbrs[i].length);
+    pos.setXYZ(i, a.x, a.y, a.z);
+  }
 }
 
 // ---------- pose ----------
@@ -321,6 +449,8 @@ export function buildAvatar(initial: CharacterParams, figure: FigureId = 'a', le
   const shoesAnchor = new THREE.Group();
   head.add(hatAnchor, glassesAnchor);
   root.add(head, neckAnchor, bagAnchor, torsoAnchor, bottomAnchor, shoesAnchor);
+  // The stage podium's top surface sits at y=0.12 (see scene.ts).
+  root.position.y = PODIUM_TOP;
 
   let character = initial;
   let leg = legRatio;
