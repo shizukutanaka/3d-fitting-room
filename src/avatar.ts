@@ -107,7 +107,7 @@ export interface AvatarRig {
   /** Rest-pose body and worn-garment surface, for draping the
    *  neck / bag accessories; null until the figure has loaded. */
   fit(): AccessoryFit | null;
-  /** Called after a figure (re)loads, so fitted accessories can be rebuilt. */
+  /** Called after the figure (re)loads or is recalibrated, so fitted accessories can be rebuilt. */
   onMount?: () => void;
   /** Resolves when the current figure's mesh has loaded. */
   ready: Promise<void>;
@@ -949,6 +949,7 @@ export function buildAvatar(initial: CharacterParams, figure: FigureId = 'a', le
     // The satin finish takes a hint of the chosen tone.
     f.body.color.copy(MANNEQUIN_BASE).lerp(new THREE.Color(skinColorForTone(character.skinTone)), 0.35);
     applyHeels();
+    rig.onMount?.();
   }
 
   /** Pumps raise the heel: the feet flex at the ankle with the toes

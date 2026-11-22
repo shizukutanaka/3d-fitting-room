@@ -245,7 +245,7 @@ function buildAccessory(
         new THREE.Vector3(rx * 0.7, ny + 0.012, nz),
       ].map((v) => fit.toNeck(v));
       g.add(mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 48, 0.0022, 8), goldMat, 0, 0, 0));
-      const gemAt = fit.toNeck(onFront(fit, 0, ny - 0.1, 0.011));
+      const gemAt = fit.toNeck(onFront(fit, 0, ny - 0.1, 0.014));
       const gem = mesh(
         new THREE.OctahedronGeometry(0.0095),
         new THREE.MeshStandardMaterial({
@@ -277,8 +277,9 @@ function buildAccessory(
       }
       g.add(mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(ring, true), 64, tube, 12, true), cloth, 0, 0, 0));
       const front = z + rz + tube;
-      const tail = [new THREE.Vector3(0.03, y - 0.03, front)];
-      for (let k = 1; k <= 5; k++) tail.push(onFront(fit, 0.03 + k * 0.002, y - 0.03 - k * 0.026, 0.012));
+      const top = onFront(fit, 0.03, y - 0.03, 0.012, 0.024);
+      const tail = [new THREE.Vector3(0.03, y - 0.03, Math.max(front, top.z))];
+      for (let k = 1; k <= 10; k++) tail.push(onFront(fit, 0.03 + k * 0.001, y - 0.03 - k * 0.013, 0.012, 0.024));
       g.add(mesh(ribbon(tail.map((v) => fit.toNeck(v)), 0.044), cloth, 0, 0, 0));
       return { group: g, anchor: 'neck' };
     }
@@ -309,8 +310,8 @@ function buildAccessory(
       const x1 = -0.1;
       const y0 = by + 0.1;
       const y1 = sy - 0.03;
-      for (let k = 0; k <= 8; k++) {
-        const t = k / 8;
+      for (let k = 0; k <= 16; k++) {
+        const t = k / 16;
         strap.push(onFront(fit, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, 0.008));
       }
       strap.push(new THREE.Vector3(x1 - 0.005, sy + 0.006, 0.01), new THREE.Vector3(x1 - 0.01, sy - 0.03, -0.07));
@@ -321,8 +322,11 @@ function buildAccessory(
 }
 
 /** A point on the front surface of the body / worn clothes, `clear` in front of it. */
-function onFront(fit: AccessoryFit, x: number, y: number, clear: number): THREE.Vector3 {
-  return new THREE.Vector3(x, y, fit.frontZ(x, y) + clear);
+function onFront(fit: AccessoryFit, x: number, y: number, clear: number, d = 0.015): THREE.Vector3 {
+  // The highest point nearby, so the smoothed strip cannot dip into
+  // a bulge between samples.
+  const z = Math.max(fit.frontZ(x, y), fit.frontZ(x - d, y), fit.frontZ(x + d, y), fit.frontZ(x, y - d), fit.frontZ(x, y + d));
+  return new THREE.Vector3(x, y, z + clear);
 }
 
 /** A flat strip of the given width along a polyline (in the xy-plane sense: width runs across the path, facing +z). */
