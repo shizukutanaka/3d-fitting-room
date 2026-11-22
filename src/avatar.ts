@@ -208,6 +208,9 @@ function loadFigure(id: FigureId): Promise<FigureAsset> {
 }
 
 const PODIUM_TOP = 0.12;
+const TOP_IDS = new Set(['tee', 'blouse', 'hoodie', 'dress', 'dressLong']);
+/** Body gap (m) a top is drawn in to while an outer layer is worn. */
+const UNDER_LAYER_GAP = 0.004;
 
 /** Minimum gap (m) between each garment and the body surface. */
 function garmentClearance(id: string): number {
@@ -255,12 +258,22 @@ export function keepGarmentsOutside(scene: THREE.Object3D): void {
       else grid.set(key, [k]);
     }
   });
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (let k = 1; k < bp.length; k += 3) {
+    if (bp[k] < minY) minY = bp[k];
+    if (bp[k] > maxY) maxY = bp[k];
+  }
+  const tall = maxY - minY;
   const inv = new THREE.Matrix4();
+  const w = new THREE.Vector3();
   for (const [m, id] of garments) {
     const clear = garmentClearance(id);
     const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute;
     if (!/^(shoes|sneakers|boots)/.test(id)) collapseSpikes(m.geometry);
     inv.copy(m.matrixWorld).invert();
+    const layered = TOP_IDS.has(id);
+    const under = layered ? new Float32Array(pos.count * 3) : null;
     for (let i = 0; i < pos.count; i++) {
       v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
       const cx = Math.floor(v.x / CELL);
@@ -288,13 +301,30 @@ export function keepGarmentsOutside(scene: THREE.Object3D): void {
       const nx = bn[3 * bi];
       const ny = bn[3 * bi + 1];
       const nz = bn[3 * bi + 2];
-      const gap = (v.x - bp[3 * bi]) * nx + (v.y - bp[3 * bi + 1]) * ny + (v.z - bp[3 * bi + 2]) * nz;
-      if (gap >= clear) continue;
-      const push = clear - gap;
-      v.set(v.x + nx * push, v.y + ny * push, v.z + nz * push).applyMatrix4(inv);
-      pos.setXYZ(i, v.x, v.y, v.z);
+      let gap = (v.x - bp[3 * bi]) * nx + (v.y - bp[3 * bi + 1]) * ny + (v.z - bp[3 * bi + 2]) * nz;
+      if (gap < clear) {
+        const push = clear - gap;
+        v.set(v.x + nx * push, v.y + ny * push, v.z + nz * push);
+        gap = clear;
+        pos.setXYZ(i, ...w.copy(v).applyMatrix4(inv).toArray());
+      }
+      if (under && gap > UNDER_LAYER_GAP) {
+        // Under a jacket/coat the top hugs the body so the two cloth layers
+        // never cross; the skirt of a dress below the outer hem keeps its flare.
+        const t = THREE.MathUtils.smoothstep((v.y - minY) / tall, 0.45, 0.5);
+        const pull = (UNDER_LAYER_GAP - gap) * t;
+        w.set(v.x + nx * pull, v.y + ny * pull, v.z + nz * pull).applyMatrix4(inv);
+        under[3 * i] = w.x - pos.getX(i);
+        under[3 * i + 1] = w.y - pos.getY(i);
+        under[3 * i + 2] = w.z - pos.getZ(i);
+      }
     }
     pos.needsUpdate = true;
+    if (under) {
+      m.geometry.morphAttributes.position = [new THREE.BufferAttribute(under, 3)];
+      m.geometry.morphTargetsRelative = true;
+      m.updateMorphTargets();
+    }
     m.geometry.computeBoundingSphere();
   }
 }
@@ -699,7 +729,10 @@ export function buildAvatar(initial: CharacterParams, figure: FigureId = 'a', le
     if (!isDress(worn.top) && worn.bottom !== 'none') show.add(worn.bottom);
     const shoe = worn.shoes === 'sneakers' ? 'sneakers' : worn.shoes === 'boots' ? 'boots' : 'shoesLow';
     show.add(shoe);
-    for (const [id, m] of current.garments) m.visible = show.has(id);
+    for (const [id, m] of current.garments) {
+      m.visible = show.has(id);
+      if (m.morphTargetInfluences) m.morphTargetInfluences[0] = worn.outer !== 'none' && TOP_IDS.has(id) ? 1 : 0;
+    }
     const color = (id: string, c: string) => {
       const mat = current!.materials.get(id);
       if (!mat) return;

@@ -233,6 +233,23 @@ describe('wardrobe on the skinned mannequin (GLB garments, bone calibration)', {
     }
   });
 
+  it('under an outer layer the top is drawn in to the body so the cloth layers cannot cross', async () => {
+    const { rig } = await dressed({ ...DEFAULT_OUTFIT, topStyle: 'hoodie', outerStyle: 'coat' });
+    const meshes = new Map<string, THREE.SkinnedMesh>();
+    rig.root.traverse((o) => {
+      const m = o as THREE.SkinnedMesh;
+      if (m.isSkinnedMesh) meshes.set(m.name, m);
+    });
+    const hoodie = meshes.get('G_hoodie')!;
+    expect(hoodie.morphTargetInfluences?.[0]).toBe(1);
+    const delta = hoodie.geometry.morphAttributes.position[0];
+    let inward = 0;
+    for (let i = 0; i < delta.count; i++) if (Math.hypot(delta.getX(i), delta.getY(i), delta.getZ(i)) > 0.005) inward++;
+    expect(inward / delta.count).toBeGreaterThan(0.3);
+    applyOutfit(rig, { ...DEFAULT_OUTFIT, topStyle: 'hoodie', outerStyle: 'none' });
+    expect(hoodie.morphTargetInfluences?.[0]).toBe(0);
+  });
+
   it('sanitizeOutfit keeps the new catalog values and rejects off-list ones', () => {
     const o = sanitizeOutfit({
       topStyle: 'dressLong',
