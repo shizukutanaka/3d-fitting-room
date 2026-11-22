@@ -279,7 +279,12 @@ function buildAccessory(
       const front = z + rz + tube;
       const top = onFront(fit, 0.03, y - 0.03, 0.012, 0.024);
       const tail = [new THREE.Vector3(0.03, y - 0.03, Math.max(front, top.z))];
-      for (let k = 1; k <= 10; k++) tail.push(onFront(fit, 0.03 + k * 0.001, y - 0.03 - k * 0.013, 0.012, 0.024));
+      // Below the fullest point the end hangs rather than hugging the body.
+      for (let k = 1; k <= 10; k++) {
+        const p = onFront(fit, 0.03 + k * 0.001, y - 0.03 - k * 0.013, 0.015, 0.024);
+        p.z = Math.max(p.z, tail[k - 1].z - 0.004);
+        tail.push(p);
+      }
       g.add(mesh(ribbon(tail.map((v) => fit.toNeck(v)), 0.044), cloth, 0, 0, 0));
       return { group: g, anchor: 'neck' };
     }
