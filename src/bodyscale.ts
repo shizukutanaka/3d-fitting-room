@@ -44,7 +44,7 @@ export interface BodyCalibration {
 }
 
 export const DEFAULT_CALIBRATION: BodyCalibration = {
-  heightM: 1.65,
+  heightM: 1.7,
   legRatio: 'standard',
   worldScale: 1,
 };

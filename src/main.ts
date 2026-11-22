@@ -8,6 +8,7 @@ import {
   LEG_RATIOS,
   WORLD_SCALE_MAX,
   WORLD_SCALE_MIN,
+  DEFAULT_CALIBRATION,
   clampCalibration,
   loadCalibration,
   saveCalibration,
@@ -62,6 +63,7 @@ import {
 import {
   addEntry,
   currentEntry,
+  ROSTER_STORAGE_KEY,
   loadRoster,
   removeEntry,
   renameEntry,
@@ -80,10 +82,6 @@ import { exportGlb, exportVrm, type ExportedFile } from './export3d';
 import {
   BODY_PARAM_KEYS,
   CHARACTER_PARAM_SPECS,
-  EYE_COLORS,
-  FACE_PARAM_KEYS,
-  HAIR_COLORS,
-  HAIR_STYLES,
   HEIGHT_MAX,
   HEIGHT_MIN,
   fitzpatrickLabel,
@@ -140,13 +138,23 @@ let vrRig: VrRig | null = null;
 // autosaved back into that entry. The first load migrates the
 // pre-roster single save, so the person a returning user had is
 // the person they get — byte for byte.
+const hadSavedPerson = ((): boolean => {
+  try {
+    return localStorage.getItem(ROSTER_STORAGE_KEY) !== null || localStorage.getItem('fitting-room.outfit.v1') !== null;
+  } catch {
+    return false;
+  }
+})();
 let roster: Roster = loadRoster();
 let outfit: Outfit = decodeSeed(currentEntry(roster).seed) ?? loadOutfit();
 // Body Scale Calibration (bodyscale.ts): height, leg ratio and the
-// VR world-scale trim, stored on this device only. The first visit
-// asks for the height before anything else (calibration dialog).
+// VR world-scale trim, stored on this device only. Optional: a first
+// visit enters at the default height and can calibrate later from the
+// character tab (calibration dialog).
 const savedCalibration = loadCalibration();
-let calibration: BodyCalibration = savedCalibration ?? clampCalibration({ heightM: outfit.character.height });
+let calibration: BodyCalibration =
+  savedCalibration ?? (hadSavedPerson ? clampCalibration({ heightM: outfit.character.height }) : { ...DEFAULT_CALIBRATION });
+if (!hadSavedPerson) outfit = { ...outfit, character: { ...outfit.character, height: calibration.heightM } };
 const FIGURE_KEY = 'fittingRoom.figure.v1';
 function loadFigureChoice(): FigureId {
   try {
@@ -1111,25 +1119,6 @@ function renderOptions(): void {
       row.append(el('span', 'slider-label', label), input, val);
       return row;
     };
-    const fmtMm = (v: number): string => `${v >= 0 ? '+' : ''}${Math.round(v * 1000)} mm`;
-    const fmtDeg = (v: number): string =>
-      `${v >= 0 ? '+' : ''}${Math.round((v * 180) / Math.PI)}°`;
-    const faceFmt = (param: (typeof FACE_PARAM_KEYS)[number], def: number): ((v: number) => string) => {
-      switch (param) {
-        case 'eyeHeight':
-        case 'browHeight':
-          return fmtMm;
-        case 'eyeTilt':
-        case 'browTilt':
-          return fmtDeg;
-        case 'asymmetry':
-          return (v) => `${Math.round(v * 100)}%`;
-        default:
-          return (v) => `${Math.round((v / def) * 100)}%`;
-      }
-    };
-
-
     // height: regenerated profile + camera/mirror follow
     const heightRow = el('div', 'slider-row');
     const cm = Math.round(c.height * 100);
@@ -1153,6 +1142,7 @@ function renderOptions(): void {
 
     // Body Scale Calibration: mannequin figure, leg ratio, VR trim
     // and the worn hems against body landmarks (bodyscale.ts).
+    nodes.push(chip(t('calib.open'), false, () => openCalibrationDialog()));
     nodes.push(el('span', 'group-label', t('calib.figure')));
     for (const f of FIGURES) {
       nodes.push(
@@ -1214,57 +1204,9 @@ function renderOptions(): void {
       );
     }
 
-    nodes.push(el('span', 'group-label', t('ui.face')));
-    for (const param of FACE_PARAM_KEYS) {
-      const spec = CHARACTER_PARAM_SPECS[param];
-      if (spec.kind !== 'range') continue;
-      nodes.push(
-        rangeRow(
-          t(`face.${param}` as I18nKey),
-          c[param],
-          spec.min,
-          spec.max,
-          faceFmt(param, spec.def),
-          (v) => patchCharacter({ [param]: v } as Partial<CharacterParams>),
-        ),
-      );
-    }
-
-    // hairstyle chips
-    nodes.push(el('span', 'group-label', t('ui.hairStyle')));
-    for (const style of HAIR_STYLES) {
-      nodes.push(
-        chip(t(key('hair', style)), c.hairStyle === style, () =>
-          update({ ...outfit, character: { ...c, hairStyle: style } }),
-        ),
-      );
-    }
-    // hair / eye color swatches
-    const swatch = (color: string, selected: boolean, label: string, onClick: () => void) => {
-      const s = el('button', 'swatch') as HTMLButtonElement;
-      s.type = 'button';
-      s.style.background = color;
-      s.setAttribute('aria-pressed', String(selected));
-      s.setAttribute('aria-label', `${label} ${color}`);
-      s.addEventListener('click', onClick);
-      return s;
-    };
-    nodes.push(el('span', 'group-label', t('ui.hairColor')));
-    for (const color of HAIR_COLORS) {
-      nodes.push(
-        swatch(color, c.hairColor === color, t('ui.hairColor'), () =>
-          update({ ...outfit, character: { ...c, hairColor: color } }),
-        ),
-      );
-    }
-    nodes.push(el('span', 'group-label', t('ui.eyeColor')));
-    for (const color of EYE_COLORS) {
-      nodes.push(
-        swatch(color, c.eyeColor === color, t('ui.eyeColor'), () =>
-          update({ ...outfit, character: { ...c, eyeColor: color } }),
-        ),
-      );
-    }
+    // Face, hairstyle, hair and eye colour do not show on the
+    // mannequin, so they have no controls; the values stay in the
+    // seed for compatibility (DESIGN.md §26).
 
     // seed: this person + outfit as one short string. Copy it out,
     // or paste someone else's in — everything resolves on-device.
@@ -2485,9 +2427,9 @@ void rig.ready.then(() => {
   renderOptions();
 });
 
-// ---- first visit: Body Scale Calibration dialog ----
-// Height is the one required input; leg ratio and the VR trim are
-// optional. Nothing leaves the device (bodyscale.ts storage).
+// ---- Body Scale Calibration dialog (optional, from the character tab) ----
+// Every field is optional; an empty height keeps the current one.
+// Nothing leaves the device (bodyscale.ts storage).
 function openCalibrationDialog(): void {
   const overlay = el('div', 'calib-overlay');
   const box = el('div', 'calib-dialog');
@@ -2497,7 +2439,6 @@ function openCalibrationDialog(): void {
   const form = document.createElement('form');
   const hInput = el('input', 'calib-height') as HTMLInputElement;
   hInput.type = 'number';
-  hInput.required = true;
   hInput.min = String(Math.round(HEIGHT_MIN * 100));
   hInput.max = String(Math.round(HEIGHT_MAX * 100));
   hInput.step = '1';
@@ -2522,6 +2463,11 @@ function openCalibrationDialog(): void {
   ws.setAttribute('aria-label', t('calib.worldScale'));
   const ok = el('button', 'chip primary', t('calib.ok')) as HTMLButtonElement;
   ok.type = 'submit';
+  const cancel = el('button', 'chip', t('calib.cancel')) as HTMLButtonElement;
+  cancel.type = 'button';
+  cancel.addEventListener('click', () => overlay.remove());
+  const actions = el('div', 'calib-row');
+  actions.append(ok, cancel);
   const hRow = el('label', 'calib-row');
   hRow.append(el('span', 'slider-label', t('calib.height')), hInput, el('span', 'slider-val', 'cm'));
   form.append(
@@ -2533,12 +2479,12 @@ function openCalibrationDialog(): void {
     el('span', 'group-label', t('calib.worldScale')),
     ws,
     el('p', 'calib-hint', t('calib.worldScaleHint')),
-    ok,
+    actions,
   );
   form.addEventListener('submit', (e) => {
     e.preventDefault();
     if (!hInput.reportValidity()) return;
-    const h = Number(hInput.value) / 100;
+    const h = hInput.value.trim() === '' ? calibration.heightM : Number(hInput.value) / 100;
     setCalibration({ heightM: h, legRatio: leg, worldScale: Number(ws.value) });
     patchCharacter({ height: h });
     void rig.setBody(rig.figure(), calibration.legRatio).then(() => renderOptions());
@@ -2546,7 +2492,9 @@ function openCalibrationDialog(): void {
   });
   box.append(form);
   overlay.append(box);
+  overlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') overlay.remove();
+  });
   document.body.append(overlay);
   hInput.focus();
 }
-if (!savedCalibration) openCalibrationDialog();

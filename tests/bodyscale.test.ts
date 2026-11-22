@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BODY_RATIOS,
   CROTCH_RATIO,
+  DEFAULT_CALIBRATION,
   clampCalibration,
   describeLength,
   jointHeights,
@@ -109,5 +110,10 @@ describe('Body Scale Calibration', () => {
     saveCalibration({ heightM: 2.4, legRatio: 'long', worldScale: 3 }, storage);
     expect(loadCalibration(storage)).toEqual({ heightM: 1.95, legRatio: 'long', worldScale: 1.1 });
     expect(clampCalibration({ legRatio: 'x' as never }).legRatio).toBe('standard');
+  });
+
+  it('is optional: an uncalibrated visit uses 170 cm, standard legs and true world scale', () => {
+    expect(DEFAULT_CALIBRATION).toEqual({ heightM: 1.7, legRatio: 'standard', worldScale: 1 });
+    expect(clampCalibration({})).toEqual(DEFAULT_CALIBRATION);
   });
 });
