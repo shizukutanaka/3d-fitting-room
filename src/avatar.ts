@@ -74,6 +74,20 @@ export interface GarmentLength {
   label: LengthLabel;
 }
 
+export interface AccessoryFit {
+  /** Front-most z (rest pose, world) of the body and visible garments near (x, y). */
+  frontZ(x: number, y: number): number;
+  /** Rest-pose world point to the neck / bag anchor's local space. */
+  toNeck(v: THREE.Vector3): THREE.Vector3;
+  toBag(v: THREE.Vector3): THREE.Vector3;
+  /** The neck cross-section where a scarf wraps (rest pose, world). */
+  neck: { y: number; z: number; rx: number; rz: number };
+  /** Neck bone, hips bone, and shoulder-top height (rest pose, world). */
+  neckY: number;
+  hipsY: number;
+  shoulderTopY: number;
+}
+
 export interface AvatarRig {
   root: THREE.Group;
   /** Head pivot (rides the head bone): the focus target for the
@@ -90,6 +104,11 @@ export interface AvatarRig {
   shoesAnchor: THREE.Group;
   /** The current top's material (recolored by the outfit). */
   topMaterial: THREE.MeshPhysicalMaterial;
+  /** Rest-pose body and worn-garment surface, for draping the
+   *  neck / bag accessories; null until the figure has loaded. */
+  fit(): AccessoryFit | null;
+  /** Called after a figure (re)loads, so fitted accessories can be rebuilt. */
+  onMount?: () => void;
   /** Resolves when the current figure's mesh has loaded. */
   ready: Promise<void>;
   figure(): FigureId;
@@ -208,14 +227,20 @@ function loadFigure(id: FigureId): Promise<FigureAsset> {
 }
 
 const PODIUM_TOP = 0.12;
+/** Plantar flexion of the foot in pumps (rad); the toes stay flat. */
+const PUMP_FLEX = 0.3;
+const FOOT_BONES = ['leftFoot', 'rightFoot', 'leftToes', 'rightToes'];
 const TOP_IDS = new Set(['tee', 'blouse', 'hoodie', 'dress', 'dressLong']);
-/** Body gap (m) a top is drawn in to while an outer layer is worn. */
-const UNDER_LAYER_GAP = 0.004;
+const OUTER_IDS = new Set(['jacket', 'cardigan', 'coat']);
+/** Gaps (m) above the base layer: a top worn under an outer layer is drawn
+ *  in to UNDER_OVER_BASE; the outer layer keeps at least OUTER_OVER_BASE. */
+const UNDER_OVER_BASE = 0.004;
+const OUTER_OVER_BASE = 0.011;
 
 /** Minimum gap (m) between each garment and the body surface. */
 function garmentClearance(id: string): number {
   if (id === 'base' || id.startsWith('shoes') || id === 'sneakers' || id === 'boots') return 0.003;
-  if (id === 'jacket' || id === 'cardigan' || id === 'coat') return 0.008;
+  if (OUTER_IDS.has(id)) return 0.008;
   return 0.005;
 }
 
@@ -267,8 +292,22 @@ export function keepGarmentsOutside(scene: THREE.Object3D): void {
   const tall = maxY - minY;
   const inv = new THREE.Matrix4();
   const w = new THREE.Vector3();
+  const cellOf = (x: number, y: number, z: number) => [Math.floor(x / CELL), Math.floor(y / CELL), Math.floor(z / CELL)];
+  // The opaque base layer's thickness per cell, so the layers above it can
+  // be ordered: base < top drawn in under an outer layer < outer layer.
+  const baseGap = new Map<string, number>();
+  const baseAround = (x: number, y: number, z: number) => {
+    const [cx, cy, cz] = cellOf(x, y, z);
+    let g = 0;
+    for (let dx = -1; dx <= 1; dx++)
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dz = -1; dz <= 1; dz++) g = Math.max(g, baseGap.get(`${cx + dx},${cy + dy},${cz + dz}`) ?? 0);
+    return g;
+  };
+  garments.sort(([, a], [, b]) => Number(b === 'base') - Number(a === 'base'));
   for (const [m, id] of garments) {
-    const clear = garmentClearance(id);
+    const isBase = id === 'base';
+    const isOuter = OUTER_IDS.has(id);
     const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute;
     if (!/^(shoes|sneakers|boots)/.test(id)) collapseSpikes(m.geometry);
     inv.copy(m.matrixWorld).invert();
@@ -276,9 +315,7 @@ export function keepGarmentsOutside(scene: THREE.Object3D): void {
     const under = layered ? new Float32Array(pos.count * 3) : null;
     for (let i = 0; i < pos.count; i++) {
       v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
-      const cx = Math.floor(v.x / CELL);
-      const cy = Math.floor(v.y / CELL);
-      const cz = Math.floor(v.z / CELL);
+      const [cx, cy, cz] = cellOf(v.x, v.y, v.z);
       let best = Infinity;
       let bi = -1;
       for (let dx = -1; dx <= 1; dx++)
@@ -302,17 +339,24 @@ export function keepGarmentsOutside(scene: THREE.Object3D): void {
       const ny = bn[3 * bi + 1];
       const nz = bn[3 * bi + 2];
       let gap = (v.x - bp[3 * bi]) * nx + (v.y - bp[3 * bi + 1]) * ny + (v.z - bp[3 * bi + 2]) * nz;
+      const clear = isOuter ? Math.max(garmentClearance(id), baseAround(v.x, v.y, v.z) + OUTER_OVER_BASE) : garmentClearance(id);
       if (gap < clear) {
         const push = clear - gap;
         v.set(v.x + nx * push, v.y + ny * push, v.z + nz * push);
         gap = clear;
         pos.setXYZ(i, ...w.copy(v).applyMatrix4(inv).toArray());
       }
-      if (under && gap > UNDER_LAYER_GAP) {
-        // Under a jacket/coat the top hugs the body so the two cloth layers
-        // never cross; the skirt of a dress below the outer hem keeps its flare.
+      if (isBase) {
+        const key = `${cx},${cy},${cz}`;
+        baseGap.set(key, Math.max(baseGap.get(key) ?? 0, gap));
+      }
+      const target = under ? baseAround(v.x, v.y, v.z) + UNDER_OVER_BASE : Infinity;
+      if (under && gap > target) {
+        // Under a jacket/coat the top is drawn in between the base layer and
+        // the outer layer so the cloth layers never cross; the skirt of a
+        // dress below the outer hem keeps its flare.
         const t = THREE.MathUtils.smoothstep((v.y - minY) / tall, 0.45, 0.5);
-        const pull = (UNDER_LAYER_GAP - gap) * t;
+        const pull = (target - gap) * t;
         w.set(v.x + nx * pull, v.y + ny * pull, v.z + nz * pull).applyMatrix4(inv);
         under[3 * i] = w.x - pos.getX(i);
         under[3 * i + 1] = w.y - pos.getY(i);
@@ -450,6 +494,93 @@ function setJoint(j: Joint, x: number, y: number, z: number): void {
   if (y) j.bone.quaternion.multiply(qa.setFromAxisAngle(j.ay, y));
 }
 
+// ---------- rest-pose surface queries (accessory fitting) ----------
+
+const SURF_CELL = 0.02;
+
+interface RestSurface {
+  pos: Float32Array;
+  delta: Float32Array | null;
+  grid: Map<string, number[]>;
+}
+
+function restMesh(m: THREE.Mesh, into?: RestSurface): RestSurface {
+  const out: RestSurface = into ?? { pos: new Float32Array(0), delta: null, grid: new Map() };
+  const p = m.geometry.getAttribute('position');
+  const d = m.geometry.morphAttributes.position?.[0];
+  const base = out.pos.length / 3;
+  const pos = new Float32Array(out.pos.length + p.count * 3);
+  pos.set(out.pos);
+  const delta = d ? new Float32Array(p.count * 3) : out.delta;
+  const lin = new THREE.Matrix3().setFromMatrix4(m.matrixWorld);
+  const v = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) {
+    v.fromBufferAttribute(p, i).applyMatrix4(m.matrixWorld);
+    pos.set([v.x, v.y, v.z], 3 * (base + i));
+    if (d && delta) {
+      v.fromBufferAttribute(d, i).applyMatrix3(lin);
+      delta.set([v.x, v.y, v.z], 3 * i);
+    }
+    const key = `${Math.floor(v.x / SURF_CELL)},${Math.floor(v.y / SURF_CELL)}`;
+    const k = base + i;
+    const cell = out.grid.get(key);
+    if (cell) cell.push(k);
+    else out.grid.set(key, [k]);
+  }
+  out.pos = pos;
+  out.delta = delta;
+  return out;
+}
+
+function restSurface(f: { group: THREE.Object3D }, garments: boolean): RestSurface {
+  let s: RestSurface = { pos: new Float32Array(0), delta: null, grid: new Map() };
+  f.group.traverse((o) => {
+    const m = o as THREE.SkinnedMesh;
+    if (!m.isSkinnedMesh) return;
+    const g = o.name.startsWith('G_') || o.parent?.name.startsWith('G_');
+    if (Boolean(g) === garments) s = restMesh(m, s);
+  });
+  return s;
+}
+
+function frontOf(s: RestSurface, x: number, y: number, morph = 0, r = 0.012): number {
+  let z = -Infinity;
+  const reach = Math.ceil(r / SURF_CELL);
+  const cx = Math.floor(x / SURF_CELL);
+  const cy = Math.floor(y / SURF_CELL);
+  for (let dx = -reach; dx <= reach; dx++)
+    for (let dy = -reach; dy <= reach; dy++)
+      for (const k of s.grid.get(`${cx + dx},${cy + dy}`) ?? []) {
+        if (Math.abs(s.pos[3 * k] - x) > r || Math.abs(s.pos[3 * k + 1] - y) > r) continue;
+        z = Math.max(z, s.pos[3 * k + 2] + (s.delta && morph ? s.delta[3 * k + 2] * morph : 0));
+      }
+  return z;
+}
+
+function topOf(s: RestSurface, x: number, yMax: number): number {
+  let y = -Infinity;
+  for (let k = 0; k < s.pos.length / 3; k++) {
+    const py = s.pos[3 * k + 1];
+    if (py < yMax && Math.abs(s.pos[3 * k] - x) < 0.012 && Math.abs(s.pos[3 * k + 2]) < 0.05) y = Math.max(y, py);
+  }
+  return y;
+}
+
+/** Extent of the body's horizontal slice at height y (|x| < maxX). */
+function slice(s: RestSurface, y: number, dy: number, maxX: number, maxZ = Infinity) {
+  const out = { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity };
+  for (let k = 0; k < s.pos.length / 3; k++) {
+    const x = s.pos[3 * k];
+    const z = s.pos[3 * k + 2];
+    if (Math.abs(s.pos[3 * k + 1] - y) > dy || Math.abs(x) > maxX || z > maxZ) continue;
+    out.minX = Math.min(out.minX, x);
+    out.maxX = Math.max(out.maxX, x);
+    out.minZ = Math.min(out.minZ, z);
+    out.maxZ = Math.max(out.maxZ, z);
+  }
+  return out;
+}
+
 // ---------- the rig ----------
 
 interface LoadedFigure {
@@ -485,8 +616,14 @@ export function buildAvatar(initial: CharacterParams, figure: FigureId = 'a', le
   let character = initial;
   let leg = legRatio;
   let current: LoadedFigure | null = null;
+  let standY = 0;
+  const footRest = new Map<string, THREE.Quaternion>();
+  const heels = new THREE.Group();
+  heels.name = 'pump-heels';
+  root.add(heels);
   let worn: WornGarments | null = null;
   let scales: BoneScales | null = null;
+  let accessoryFit: AccessoryFit | null = null;
   let target = poseTargets('stand');
   const now: JointAngles = poseTargets('stand');
   let gazeYaw = 0;
@@ -503,6 +640,7 @@ export function buildAvatar(initial: CharacterParams, figure: FigureId = 'a', le
     bottomAnchor,
     shoesAnchor,
     topMaterial: garmentMaterial('tee'),
+    fit: () => (current ? accessoryFit : null),
     ready: Promise.resolve(),
     figure: () => current?.id ?? figure,
     applyPose(pose) {
@@ -557,6 +695,7 @@ export function buildAvatar(initial: CharacterParams, figure: FigureId = 'a', le
     attachAnchors(loaded);
     applyCharacter();
     applyGarments();
+    rig.onMount?.();
   }
 
   function prepare(fig: FigureId, asset: FigureAsset): LoadedFigure {
@@ -667,8 +806,14 @@ export function buildAvatar(initial: CharacterParams, figure: FigureId = 'a', le
     g.scale.set(1, 1, 1);
     for (const b of f.bones.values()) b.scale.set(1, 1, 1);
     for (const j of Object.values(f.joints)) j.bone.quaternion.copy(j.rest);
+    footRest.clear();
+    for (const n of FOOT_BONES) {
+      const bone = f.bones.get(n);
+      if (bone) footRest.set(n, bone.quaternion.clone());
+    }
     root.updateMatrixWorld(true);
     const ext = f as LoadedFigure & { eyeBox: THREE.Box3 | null; box: THREE.Box3 };
+    const body = restSurface(f, false);
     const headBone = f.bones.get('head')!;
     const hb = headBone.getWorldPosition(new THREE.Vector3());
     const eye = ext.eyeBox ?? new THREE.Box3(new THREE.Vector3(-0.04, hb.y + 0.09, hb.z + 0.05), new THREE.Vector3(0.04, hb.y + 0.11, hb.z + 0.09));
@@ -682,15 +827,57 @@ export function buildAvatar(initial: CharacterParams, figure: FigureId = 'a', le
     };
     place(head, headBone, 0, hb.y, hb.z);
     // hat and glasses are children of head: local offsets
-    hatAnchor.position.set(0, ext.box.max.y - hb.y - 0.006, -0.012);
+    // The hats were modelled on a cranium centred 0.12 m below the
+    // anchor with radii (0.079, 0.072, 0.096); fit that to this head.
+    const top = ext.box.max.y;
+    const sliceY = top - 0.08;
+    const cran = slice(body, sliceY, 0.01, 0.12);
+    const crz = (cran.maxZ - cran.minZ) / 2;
+    const sx = (cran.maxX + 0.003) / 0.079;
+    const sy = (top - sliceY + 0.003) / 0.072;
+    const sz = (crz + 0.003) / 0.096;
+    hatAnchor.scale.set(sx, sy, sz);
+    hatAnchor.position.set(0, sliceY - hb.y + 0.12 * sy, (cran.minZ + cran.maxZ) / 2 - hb.z + 0.002 * sz);
     glassesAnchor.position.set(0, (eye.min.y + eye.max.y) / 2 - hb.y, eye.max.z - hb.z + 0.006);
     const neck = f.bones.get('neck')!.getWorldPosition(new THREE.Vector3());
     place(neckAnchor, f.bones.get('upperChest')!, 0, neck.y - 0.005, neck.z + 0.005);
     const hips = f.bones.get('hips')!.getWorldPosition(new THREE.Vector3());
-    place(bagAnchor, f.bones.get('hips')!, -0.235, hips.y - 0.02, hips.z + 0.02);
+    place(bagAnchor, f.bones.get('hips')!, hips.x, hips.y, hips.z);
     place(torsoAnchor, f.bones.get('chest')!, 0, f.bones.get('chest')!.getWorldPosition(new THREE.Vector3()).y, 0);
     place(bottomAnchor, f.bones.get('hips')!, 0, hips.y, 0);
     place(shoesAnchor, g, 0, 0, 0);
+    // Just above the neck joint, clear of the shoulders and under the chin.
+    const neckRing = slice(body, neck.y + 0.03, 0.006, 0.08, frontOf(body, 0, neck.y, 0, 0.02) + 0.008);
+    const shoulderX = f.bones.get('leftUpperArm')!.getWorldPosition(new THREE.Vector3()).x * 0.75;
+    const layers = new Map<string, RestSurface>();
+    for (const [id, m] of f.garments) layers.set(id, restMesh(m));
+    const neckAt = neckAnchor.getWorldPosition(new THREE.Vector3());
+    const bagAt = bagAnchor.getWorldPosition(new THREE.Vector3());
+    // The front surface over whatever is worn. The search widens where
+    // the mesh is sparse; a hit far behind the body means it only
+    // found the back, so it widens further.
+    const frontZ = (x: number, y: number) => {
+      for (const r of [0.012, 0.024, 0.04]) {
+        let z = frontOf(body, x, y, 0, r);
+        for (const [id, m] of f.garments) if (m.visible) z = Math.max(z, frontOf(layers.get(id)!, x, y, m.morphTargetInfluences?.[0] ?? 0, r));
+        if (z > neck.z - 0.04) return z;
+      }
+      return neck.z + 0.06;
+    };
+    accessoryFit = {
+      frontZ,
+      toNeck: (v) => v.clone().sub(neckAt),
+      toBag: (v) => v.clone().sub(bagAt),
+      neck: {
+        y: neck.y + 0.03,
+        z: (neckRing.minZ + neckRing.maxZ) / 2,
+        rx: Math.max(-neckRing.minX, neckRing.maxX),
+        rz: (neckRing.maxZ - neckRing.minZ) / 2,
+      },
+      neckY: neck.y,
+      hipsY: hips.y,
+      shoulderTopY: topOf(body, shoulderX, neck.y + 0.02),
+    };
     root.position.copy(saved.p);
     root.quaternion.copy(saved.q);
     root.scale.copy(saved.s);
@@ -705,7 +892,8 @@ export function buildAvatar(initial: CharacterParams, figure: FigureId = 'a', le
     f.group.scale.setScalar(s.root);
     // Feet stay on the floor: the pelvis rises by the leg change.
     const hipT = landmarks(character.height, leg).crotch + (f.src.hipJoint - f.src.crotch) * s.root;
-    f.group.position.y = hipT - f.src.hipJoint * s.root;
+    standY = hipT - f.src.hipJoint * s.root;
+    f.group.position.y = standY;
     for (const side of ['left', 'right']) {
       b(`${side}UpperLeg`)?.scale.setScalar(s.upperLeg);
       b(`${side}LowerLeg`)?.scale.setScalar(s.lowerLeg);
@@ -720,6 +908,60 @@ export function buildAvatar(initial: CharacterParams, figure: FigureId = 'a', le
     b('head')?.scale.setScalar(s.head);
     // The satin finish takes a hint of the chosen tone.
     f.body.color.copy(MANNEQUIN_BASE).lerp(new THREE.Color(skinColorForTone(character.skinTone)), 0.35);
+    applyHeels();
+  }
+
+  /** Pumps raise the heel: the feet flex at the ankle with the toes
+   *  flat, the figure rises so the balls of the feet stay on the
+   *  floor, and a heel post fills the gap under each heel. */
+  function applyHeels(): void {
+    if (!current) return;
+    const f = current;
+    for (const [n, q] of footRest) f.bones.get(n)?.quaternion.copy(q);
+    f.group.position.y = standY;
+    for (const c of [...heels.children]) {
+      heels.remove(c);
+      (c as THREE.Mesh).geometry.dispose();
+    }
+    const mat = f.materials.get('shoesLow');
+    if (!worn || worn.shoes !== 'pumps' || !mat) return;
+    root.updateMatrixWorld(true);
+    const ball = (side: string) => f.bones.get(`${side}Toes`)!.getWorldPosition(new THREE.Vector3()).y;
+    const before = ball('left') + ball('right');
+    const across = new THREE.Vector3(1, 0, 0).applyQuaternion(root.getWorldQuaternion(new THREE.Quaternion()));
+    const flex = (bone: THREE.Bone, angle: number) => {
+      const parentQ = bone.parent!.getWorldQuaternion(new THREE.Quaternion()).invert();
+      bone.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(across.clone().applyQuaternion(parentQ), angle));
+      bone.updateMatrixWorld(true);
+    };
+    for (const side of ['left', 'right']) {
+      flex(f.bones.get(`${side}Foot`)!, PUMP_FLEX);
+      flex(f.bones.get(`${side}Toes`)!, -PUMP_FLEX);
+    }
+    const drop = (before - ball('left') - ball('right')) / 2;
+    f.group.position.y = standY + drop / root.getWorldScale(new THREE.Vector3()).y;
+    root.updateMatrixWorld(true);
+    // Each post stands under the back of the posed shoe's sole.
+    const shoe = f.garments.get('shoesLow')!;
+    const pos = shoe.geometry.getAttribute('position');
+    const pts: THREE.Vector3[] = [];
+    for (let i = 0; i < pos.count; i++) {
+      const v = shoe.getVertexPosition(i, new THREE.Vector3());
+      pts.push(root.worldToLocal(shoe.localToWorld(shoe.applyBoneTransform(i, v))));
+    }
+    for (const side of ['left', 'right']) {
+      const fx = root.worldToLocal(f.bones.get(`${side}Foot`)!.getWorldPosition(new THREE.Vector3())).x;
+      const mine = pts.filter((p) => Math.abs(p.x - fx) < 0.06);
+      if (!mine.length) continue;
+      const back = Math.min(...mine.map((p) => p.z));
+      const heel = mine.filter((p) => p.z < back + 0.03);
+      const top = heel.reduce((lo, p) => (p.y < lo.y ? p : lo));
+      if (top.y < 0.01) continue;
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.005, top.y + 0.004, 14), mat);
+      post.position.set(top.x, (top.y + 0.004) / 2, back + 0.016);
+      post.castShadow = true;
+      heels.add(post);
+    }
   }
 
   function applyGarments(): void {
@@ -743,6 +985,14 @@ export function buildAvatar(initial: CharacterParams, figure: FigureId = 'a', le
     if (worn.outer !== 'none') color(worn.outer, worn.outerColor);
     if (worn.bottom !== 'none') color(worn.bottom, worn.bottomColor);
     color(shoe, worn.shoeColor);
+    const shoeMat = current.materials.get('shoesLow');
+    if (shoeMat) {
+      // Pumps are patent; flats are a softer leather.
+      const pumps = worn.shoes === 'pumps';
+      shoeMat.roughness = pumps ? 0.16 : FABRIC.shoesLow.roughness;
+      shoeMat.clearcoat = pumps ? 1 : (FABRIC.shoesLow.clearcoat ?? 0);
+    }
+    applyHeels();
     const top = current.materials.get(worn.top);
     if (top) rig.topMaterial = top;
   }

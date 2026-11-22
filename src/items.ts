@@ -5,8 +5,7 @@
 // scarf, bag) stay procedural and ride the rig's anchors.
 
 import * as THREE from 'three';
-import type { AvatarRig } from './avatar';
-import type { CharacterParams } from './character';
+import type { AccessoryFit, AvatarRig } from './avatar';
 import { fabricTextures, leatherTextures, ribbedBump } from './textures';
 import type {
   AccessoryId,
@@ -223,27 +222,30 @@ const goldMat = new THREE.MeshStandardMaterial({
 
 function buildAccessory(
   id: AccessoryId,
-  c: CharacterParams,
+  fit: AccessoryFit | null,
 ): { group: THREE.Group; anchor: 'neck' | 'bag' } | null {
   const g = new THREE.Group();
   switch (id) {
     case 'none':
       return null;
     case 'necklace': {
-      // The chain is a tube along a curve fitted to the chest's
-      // surface (computed from the torso profile) — a tilted torus
-      // either floats off the bust or sinks into it. The whole
-      // drape is pushed out (or pulled in) with the bust, so the
-      // chain keeps lying on the chest when the body changes.
-      g.scale.z = 1 + (c.bust - 1) * 0.55;
-      const curve = new THREE.CatmullRomCurve3([
-        new THREE.Vector3(-0.042, 0.005, 0.012),
-        new THREE.Vector3(-0.052, -0.045, 0.062),
-        new THREE.Vector3(0, -0.118, 0.108),
-        new THREE.Vector3(0.052, -0.045, 0.062),
-        new THREE.Vector3(0.042, 0.005, 0.012),
-      ]);
-      g.add(mesh(new THREE.TubeGeometry(curve, 40, 0.0022, 8), goldMat, 0, 0, 0));
+      // The chain follows the chest's front surface over whatever is
+      // worn, from inside the collar (hidden) down to a pendant.
+      if (!fit) return null;
+      const ny = fit.neckY;
+      const { z: nz, rx } = fit.neck;
+      const side = (sx: number, y: number) => onFront(fit, sx, y, 0.004);
+      const pts = [
+        new THREE.Vector3(-rx * 0.7, ny + 0.012, nz),
+        side(-0.05, ny - 0.02),
+        side(-0.04, ny - 0.06),
+        side(0, ny - 0.088),
+        side(0.04, ny - 0.06),
+        side(0.05, ny - 0.02),
+        new THREE.Vector3(rx * 0.7, ny + 0.012, nz),
+      ].map((v) => fit.toNeck(v));
+      g.add(mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 48, 0.0022, 8), goldMat, 0, 0, 0));
+      const gemAt = fit.toNeck(onFront(fit, 0, ny - 0.1, 0.011));
       const gem = mesh(
         new THREE.OctahedronGeometry(0.0095),
         new THREE.MeshStandardMaterial({
@@ -251,24 +253,39 @@ function buildAccessory(
           roughness: 0.12,
           envMapIntensity: 1.5,
         }),
-        0,
-        -0.13,
-        0.106,
+        gemAt.x,
+        gemAt.y,
+        gemAt.z,
       );
       g.add(gem);
       return { group: g, anchor: 'neck' };
     }
     case 'scarf': {
+      // A rolled wrap around the neck's own cross-section, with one
+      // end lying on the chest over the clothes.
+      if (!fit) return null;
       const cloth = fabricMat('#a63d46', 0.95);
-      const wrap = mesh(new THREE.TorusGeometry(0.056, 0.019, 12, 28), cloth, 0, 0.038, 0);
-      wrap.rotation.x = Math.PI / 2;
-      g.add(wrap);
-      const tail = mesh(new THREE.BoxGeometry(0.042, 0.105, 0.011), cloth, 0.038, -0.052, 0.088);
-      tail.rotation.x = 0.06;
-      g.add(tail);
+      cloth.side = THREE.DoubleSide;
+      const tube = 0.016;
+      const { y, z, rx, rz } = fit.neck;
+      const ring: THREE.Vector3[] = [];
+      for (let i = 0; i < 24; i++) {
+        const t = (i / 24) * Math.PI * 2;
+        const ex = rx * 0.85 + tube * 0.8;
+        const ez = rz * 0.9 + tube * 0.8;
+        ring.push(fit.toNeck(new THREE.Vector3(Math.sin(t) * ex, y - 0.015 - Math.cos(t) * 0.008, z + Math.cos(t) * ez)));
+      }
+      g.add(mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(ring, true), 64, tube, 12, true), cloth, 0, 0, 0));
+      const front = z + rz + tube;
+      const tail = [new THREE.Vector3(0.03, y - 0.03, front)];
+      for (let k = 1; k <= 5; k++) tail.push(onFront(fit, 0.03 + k * 0.002, y - 0.03 - k * 0.026, 0.008));
+      g.add(mesh(ribbon(tail.map((v) => fit.toNeck(v)), 0.044), cloth, 0, 0, 0));
       return { group: g, anchor: 'neck' };
     }
     case 'bag': {
+      // A small crossbody bag at the front of the hip; the strap lies
+      // over the worn clothes across the chest to the far shoulder.
+      if (!fit) return null;
       const leatherTex = leatherTextures();
       const leather = new THREE.MeshStandardMaterial({
         color: '#7c4a2d',
@@ -277,17 +294,56 @@ function buildAccessory(
         bumpScale: 0.5,
         roughness: 0.55,
         envMapIntensity: 0.7,
+        side: THREE.DoubleSide,
       });
-      g.add(mesh(new THREE.BoxGeometry(0.058, 0.165, 0.215), leather, 0.012, -0.145, 0));
-      g.add(mesh(new THREE.BoxGeometry(0.06, 0.068, 0.218), leather, 0.012, -0.095, 0));
-      g.add(mesh(new THREE.BoxGeometry(0.02, 0.014, 0.006), goldMat, 0.012, -0.128, 0.109));
-      // crossbody strap up to the opposite shoulder
-      const strap = mesh(new THREE.BoxGeometry(0.015, 0.583, 0.004), leather, -0.204, 0.148, -0.005);
-      strap.rotation.z = 0.8;
-      g.add(strap);
+      const bx = 0.13;
+      const by = fit.hipsY - 0.07;
+      const bz = Math.max(onFront(fit, bx - 0.06, by, 0).z, onFront(fit, bx + 0.06, by, 0).z, onFront(fit, bx, by, 0).z) + 0.031;
+      const at = fit.toBag(new THREE.Vector3(bx, by, bz));
+      g.add(mesh(new THREE.BoxGeometry(0.2, 0.15, 0.056), leather, at.x, at.y, at.z));
+      g.add(mesh(new THREE.BoxGeometry(0.203, 0.062, 0.059), leather, at.x, at.y + 0.046, at.z));
+      g.add(mesh(new THREE.BoxGeometry(0.02, 0.014, 0.006), goldMat, at.x, at.y + 0.018, at.z + 0.031));
+      const sy = fit.shoulderTopY;
+      const strap: THREE.Vector3[] = [new THREE.Vector3(bx + 0.07, by + 0.075, bz - 0.01)];
+      const x0 = bx + 0.05;
+      const x1 = -0.1;
+      const y0 = by + 0.1;
+      const y1 = sy - 0.03;
+      for (let k = 0; k <= 8; k++) {
+        const t = k / 8;
+        strap.push(onFront(fit, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, 0.005));
+      }
+      strap.push(new THREE.Vector3(x1 - 0.005, sy + 0.006, 0.01), new THREE.Vector3(x1 - 0.01, sy - 0.03, -0.07));
+      g.add(mesh(ribbon(strap.map((v) => fit.toBag(v)), 0.016), leather, 0, 0, 0));
       return { group: g, anchor: 'bag' };
     }
   }
+}
+
+/** A point on the front surface of the body / worn clothes, `clear` in front of it. */
+function onFront(fit: AccessoryFit, x: number, y: number, clear: number): THREE.Vector3 {
+  return new THREE.Vector3(x, y, fit.frontZ(x, y) + clear);
+}
+
+/** A flat strip of the given width along a polyline (in the xy-plane sense: width runs across the path, facing +z). */
+function ribbon(pts: THREE.Vector3[], width: number): THREE.BufferGeometry {
+  const curve = new THREE.CatmullRomCurve3(pts);
+  const n = pts.length * 6;
+  const pos: number[] = [];
+  const idx: number[] = [];
+  const side = new THREE.Vector3();
+  for (let i = 0; i <= n; i++) {
+    const p = curve.getPointAt(i / n);
+    const t = curve.getTangentAt(i / n);
+    side.set(-t.y, t.x, 0).normalize().multiplyScalar(width / 2);
+    pos.push(p.x - side.x, p.y - side.y, p.z, p.x + side.x, p.y + side.y, p.z);
+    if (i < n) idx.push(2 * i, 2 * i + 1, 2 * i + 2, 2 * i + 1, 2 * i + 3, 2 * i + 2);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  return geo;
 }
 
 // ---------- applying an outfit ----------
@@ -299,6 +355,13 @@ function clearAnchor(anchor: THREE.Group): void {
       if (obj instanceof THREE.Mesh) obj.geometry.dispose();
     });
   }
+}
+
+function applyAccessory(rig: AvatarRig, outfit: Outfit): void {
+  clearAnchor(rig.neckAnchor);
+  clearAnchor(rig.bagAnchor);
+  const acc = buildAccessory(outfit.accessory, rig.fit());
+  if (acc) (acc.anchor === 'neck' ? rig.neckAnchor : rig.bagAnchor).add(acc.group);
 }
 
 /** Swap the visible items on the rig to match the outfit. Pose is
@@ -326,12 +389,9 @@ export function applyOutfit(rig: AvatarRig, outfit: Outfit): void {
   const glasses = buildGlasses(outfit.glasses);
   if (glasses) rig.glassesAnchor.add(glasses);
 
-  clearAnchor(rig.neckAnchor);
-  clearAnchor(rig.bagAnchor);
-  const acc = buildAccessory(outfit.accessory, outfit.character);
-  if (acc) {
-    (acc.anchor === 'neck' ? rig.neckAnchor : rig.bagAnchor).add(acc.group);
-  }
+  applyAccessory(rig, outfit);
+  // The drape is fitted to the loaded figure: refit when it (re)loads.
+  rig.onMount = () => applyAccessory(rig, outfit);
 
   rig.applyPose(outfit.pose);
 }

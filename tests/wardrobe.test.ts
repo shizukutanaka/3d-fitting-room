@@ -250,6 +250,37 @@ describe('wardrobe on the skinned mannequin (GLB garments, bone calibration)', {
     expect(hoodie.morphTargetInfluences?.[0]).toBe(0);
   });
 
+  it('pumps raise the heel on posts while the balls of the feet stay on the floor; flats do not', async () => {
+    const heelsOf = (rig: { root: THREE.Object3D }) => rig.root.getObjectByName('pump-heels')!.children;
+    const toesY = (rig: { root: THREE.Object3D }) => {
+      rig.root.updateMatrixWorld(true);
+      return rig.root.getObjectByName('leftToes')!.getWorldPosition(new THREE.Vector3()).y;
+    };
+    const flats = await dressed({ ...DEFAULT_OUTFIT, shoeStyle: 'flats' });
+    const pumps = await dressed({ ...DEFAULT_OUTFIT, shoeStyle: 'pumps' });
+    expect(heelsOf(flats.rig)).toHaveLength(0);
+    expect(heelsOf(pumps.rig)).toHaveLength(2);
+    for (const h of heelsOf(pumps.rig)) {
+      const height = ((h as THREE.Mesh).geometry as THREE.CylinderGeometry).parameters.height;
+      expect(height).toBeGreaterThan(0.03);
+      expect(height).toBeLessThan(0.1);
+    }
+    expect(Math.abs(toesY(pumps.rig) - toesY(flats.rig))).toBeLessThan(0.003);
+  });
+
+  it('necklace, scarf and bag are fitted to the loaded figure and rebuilt when it changes', async () => {
+    for (const accessory of ['necklace', 'scarf', 'bag'] as const) {
+      const { rig, nan } = await dressed({ ...DEFAULT_OUTFIT, accessory });
+      expect(nan).toBe(false);
+      const anchor = accessory === 'bag' ? rig.bagAnchor : rig.neckAnchor;
+      expect(anchor.children.length).toBe(1);
+      const before = anchor.children[0];
+      await rig.setBody('b', 'standard');
+      expect(anchor.children.length).toBe(1);
+      expect(anchor.children[0]).not.toBe(before);
+    }
+  });
+
   it('sanitizeOutfit keeps the new catalog values and rejects off-list ones', () => {
     const o = sanitizeOutfit({
       topStyle: 'dressLong',
