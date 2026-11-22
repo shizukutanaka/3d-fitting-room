@@ -3,7 +3,16 @@
 
 import './style.css';
 import * as THREE from 'three';
-import { buildAvatar } from './avatar';
+import { buildAvatar, FIGURES, type FigureId } from './avatar';
+import {
+  LEG_RATIOS,
+  WORLD_SCALE_MAX,
+  WORLD_SCALE_MIN,
+  clampCalibration,
+  loadCalibration,
+  saveCalibration,
+  type BodyCalibration,
+} from './bodyscale';
 import { applyOutfit } from './items';
 import { createStage } from './scene';
 import { composeShareCard, composeShareCardFromImage, downloadBlob } from './share';
@@ -133,8 +142,30 @@ let vrRig: VrRig | null = null;
 // the person they get — byte for byte.
 let roster: Roster = loadRoster();
 let outfit: Outfit = decodeSeed(currentEntry(roster).seed) ?? loadOutfit();
-const rig = buildAvatar(outfit.character);
+// Body Scale Calibration (bodyscale.ts): height, leg ratio and the
+// VR world-scale trim, stored on this device only. The first visit
+// asks for the height before anything else (calibration dialog).
+const savedCalibration = loadCalibration();
+let calibration: BodyCalibration = savedCalibration ?? clampCalibration({ heightM: outfit.character.height });
+const FIGURE_KEY = 'fittingRoom.figure.v1';
+function loadFigureChoice(): FigureId {
+  try {
+    const v = localStorage.getItem(FIGURE_KEY);
+    return (FIGURES as readonly string[]).includes(v ?? '') ? (v as FigureId) : 'a';
+  } catch {
+    return 'a';
+  }
+}
+function setCalibration(next: Partial<BodyCalibration>): void {
+  calibration = clampCalibration({ ...calibration, ...next });
+  saveCalibration(calibration);
+  // The trim scales the player rig, so the room (and the person)
+  // read slightly larger or smaller in the headset.
+  stage.player.scale.setScalar(1 / calibration.worldScale);
+}
+const rig = buildAvatar(outfit.character, loadFigureChoice(), calibration.legRatio);
 stage.scene.add(rig.root);
+stage.player.scale.setScalar(1 / calibration.worldScale);
 stage.setSubjectHeight(outfit.character.height);
 applyOutfit(rig, outfit);
 
@@ -1113,6 +1144,7 @@ function renderOptions(): void {
     height.addEventListener('input', () => {
       const v = Number(height.value);
       patchCharacter({ height: v / 100 });
+      setCalibration({ heightM: v / 100 });
       heightVal.textContent = `${v} cm`;
     });
     height.addEventListener('change', () => renderOptions());
@@ -1297,9 +1329,9 @@ function renderOptions(): void {
     nodes.push(el('span', 'group-label', t('ui.export3d')));
     nodes.push(el('p', 'llm-note', t('export.note')));
     const exportRow = el('div', 'seed-row');
-    const glbBtn = chip(t('ui.exportGlb'), false, () => downloadExport('glb'));
+    const glbBtn = chip(t('ui.exportGlb'), false, () => void downloadExport('glb'));
     glbBtn.id = 'btn-export-glb';
-    const vrmBtn = chip(t('ui.exportVrm'), false, () => downloadExport('vrm'));
+    const vrmBtn = chip(t('ui.exportVrm'), false, () => void downloadExport('vrm'));
     vrmBtn.id = 'btn-export-vrm';
     exportRow.append(glbBtn, vrmBtn);
     nodes.push(exportRow);
@@ -1836,12 +1868,13 @@ document.getElementById('btn-photo')!.addEventListener('click', () => {
 // app (export3d.ts): built entirely on-device from a throwaway
 // T-posed rig, with the seed and the named-parameter JSON inside
 // the file, so the file describes itself wherever it travels.
-function export3dFile(format: 'glb' | 'vrm'): ExportedFile {
-  return format === 'vrm' ? exportVrm(outfit) : exportGlb(outfit);
+function export3dFile(format: 'glb' | 'vrm'): Promise<ExportedFile> {
+  const fig = rig.figure();
+  return format === 'vrm' ? exportVrm(outfit, fig, calibration.legRatio) : exportGlb(outfit, fig, calibration.legRatio);
 }
 
-function downloadExport(format: 'glb' | 'vrm'): void {
-  const { bytes } = export3dFile(format);
+async function downloadExport(format: 'glb' | 'vrm'): Promise<void> {
+  const { bytes } = await export3dFile(format);
   downloadBlob(
     new Blob([bytes.buffer as ArrayBuffer], { type: 'model/gltf-binary' }),
     `fitting-room-character.${format}`,
@@ -2173,7 +2206,7 @@ interface FittingRoomBridge {
   /** Export the current person + outfit as a 3D file ('glb' or
    *  'vrm'): the bytes as a base64 data URL, plus the part count
    *  and the seed the file carries in its extras (export3d.ts). */
-  export3dInfo(format: 'glb' | 'vrm'): { dataUrl: string; parts: number; bytes: number; seed: string };
+  export3dInfo(format: 'glb' | 'vrm'): Promise<{ dataUrl: string; parts: number; bytes: number; seed: string }>;
   /** Restore the person from a share-card PNG given as a data
    *  URL — the same code path as dropping the file on the window.
    *  Resolves true when a seed was found and applied. */
@@ -2256,7 +2289,7 @@ interface FittingRoomBridge {
   viewVrPanel(): void;
 }
 const bridge: FittingRoomBridge = {
-  ready: true,
+  ready: false,
   getOutfit: () => ({ ...outfit }),
   setOutfit: (partial) => update({ ...outfit, ...partial }),
   getSeed: () => encodeSeed(outfit),
@@ -2293,8 +2326,8 @@ const bridge: FittingRoomBridge = {
     };
   },
   commandSpec: () => describeCommandProtocol(),
-  export3dInfo: (format) => {
-    const { bytes, parts, seed } = export3dFile(format);
+  export3dInfo: async (format) => {
+    const { bytes, parts, seed } = await export3dFile(format);
     let bin = '';
     const CHUNK = 0x8000;
     for (let i = 0; i < bytes.length; i += CHUNK) {
@@ -2407,3 +2440,74 @@ const bridge: FittingRoomBridge = {
   },
 };
 (window as unknown as { __fittingRoom: FittingRoomBridge }).__fittingRoom = bridge;
+// Ready once the mannequin asset is on stage (avatar.ts loads it).
+void rig.ready.then(() => {
+  bridge.ready = true;
+  renderOptions();
+});
+
+// ---- first visit: Body Scale Calibration dialog ----
+// Height is the one required input; leg ratio and the VR trim are
+// optional. Nothing leaves the device (bodyscale.ts storage).
+function openCalibrationDialog(): void {
+  const overlay = el('div', 'calib-overlay');
+  const box = el('div', 'calib-dialog');
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-modal', 'true');
+  box.setAttribute('aria-label', t('calib.title'));
+  const form = document.createElement('form');
+  const hInput = el('input', 'calib-height') as HTMLInputElement;
+  hInput.type = 'number';
+  hInput.required = true;
+  hInput.min = String(Math.round(HEIGHT_MIN * 100));
+  hInput.max = String(Math.round(HEIGHT_MAX * 100));
+  hInput.step = '1';
+  hInput.value = String(Math.round(calibration.heightM * 100));
+  hInput.setAttribute('aria-label', t('calib.height'));
+  let leg = calibration.legRatio;
+  const legRow = el('div', 'calib-row');
+  const legChips = LEG_RATIOS.map((l) => {
+    const c = chip(t(`calib.leg.${l}`), l === leg, () => {
+      leg = l;
+      legChips.forEach((b, i) => b.setAttribute('aria-pressed', String(LEG_RATIOS[i] === l)));
+    });
+    return c;
+  });
+  legRow.append(...legChips);
+  const ws = el('input', 'slider') as HTMLInputElement;
+  ws.type = 'range';
+  ws.min = String(WORLD_SCALE_MIN);
+  ws.max = String(WORLD_SCALE_MAX);
+  ws.step = '0.01';
+  ws.value = String(calibration.worldScale);
+  ws.setAttribute('aria-label', t('calib.worldScale'));
+  const ok = el('button', 'chip primary', t('calib.ok')) as HTMLButtonElement;
+  ok.type = 'submit';
+  const hRow = el('label', 'calib-row');
+  hRow.append(el('span', 'slider-label', t('calib.height')), hInput, el('span', 'slider-val', 'cm'));
+  form.append(
+    el('h2', 'calib-title', t('calib.title')),
+    el('p', 'calib-intro', t('calib.intro')),
+    hRow,
+    el('span', 'group-label', t('calib.leg')),
+    legRow,
+    el('span', 'group-label', t('calib.worldScale')),
+    ws,
+    el('p', 'calib-hint', t('calib.worldScaleHint')),
+    ok,
+  );
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!hInput.reportValidity()) return;
+    const h = Number(hInput.value) / 100;
+    setCalibration({ heightM: h, legRatio: leg, worldScale: Number(ws.value) });
+    patchCharacter({ height: h });
+    void rig.setBody(rig.figure(), calibration.legRatio).then(() => renderOptions());
+    overlay.remove();
+  });
+  box.append(form);
+  overlay.append(box);
+  document.body.append(overlay);
+  hInput.focus();
+}
+if (!savedCalibration) openCalibrationDialog();

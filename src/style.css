@@ -507,3 +507,53 @@ body {
     font-size: 32px;
   }
 }
+
+/* Body Scale Calibration (first visit) */
+.calib-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(30, 24, 18, 0.45);
+}
+.calib-dialog {
+  max-width: 420px;
+  width: calc(100% - 32px);
+  background: var(--panel, #fff);
+  color: var(--ink);
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+}
+.calib-dialog form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.calib-title {
+  margin: 0;
+  font-size: 18px;
+}
+.calib-intro,
+.calib-hint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.calib-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.calib-height {
+  width: 88px;
+  font-size: 16px;
+  padding: 6px 8px;
+}
+.length-note {
+  font-size: 13px;
+  width: 100%;
+}

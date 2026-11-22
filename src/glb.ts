@@ -46,6 +46,11 @@ export interface GlbPartDef {
    *  of the part is rigidly bound to this one joint. Omit for an
    *  unskinned part. */
   joint?: number;
+  /** Per-vertex skinning (four joints / weights per vertex), for
+   *  deforming meshes such as the mannequin and its garments.
+   *  Takes precedence over `joint`. */
+  skinJoints?: ArrayLike<number>;
+  skinWeights?: ArrayLike<number>;
 }
 
 export interface GlbJointDef {
@@ -182,7 +187,17 @@ export function buildGlb(
     if (part.material < 0 || part.material >= materials.length) {
       throw new Error(`buildGlb: part ${i} (${part.name}) material index out of range`);
     }
-    if (part.joint !== undefined) {
+    if (part.skinJoints || part.skinWeights) {
+      if (!skin) throw new Error(`buildGlb: part ${i} (${part.name}) is skinned but no skin was given`);
+      if (part.skinJoints?.length !== vertexCount * 4 || part.skinWeights?.length !== vertexCount * 4) {
+        throw new Error(`buildGlb: part ${i} (${part.name}) skin attribute count mismatch`);
+      }
+      for (let k = 0; k < part.skinJoints.length; k++) {
+        if (part.skinJoints[k] >= skin.joints.length) {
+          throw new Error(`buildGlb: part ${i} (${part.name}) joint index out of range`);
+        }
+      }
+    } else if (part.joint !== undefined) {
       if (!skin) throw new Error(`buildGlb: part ${i} (${part.name}) names a joint but no skin was given`);
       if (part.joint < 0 || part.joint >= skin.joints.length) {
         throw new Error(`buildGlb: part ${i} (${part.name}) joint index out of range`);
@@ -193,13 +208,19 @@ export function buildGlb(
       NORMAL: floatAccessor(part.normals, 'VEC3', false),
     };
     if (part.uvs) attributes.TEXCOORD_0 = floatAccessor(part.uvs, 'VEC2', false);
-    if (part.joint !== undefined) {
-      // Rigid binding: every vertex belongs wholly to one joint.
+    if (part.skinJoints || part.joint !== undefined) {
+      // Per-vertex weights, or rigid binding (every vertex belongs
+      // wholly to one joint).
       const joints = new Uint8Array(vertexCount * 4);
       const weights = new Float32Array(vertexCount * 4);
-      for (let v = 0; v < vertexCount; v++) {
-        joints[v * 4] = part.joint;
-        weights[v * 4] = 1;
+      if (part.skinJoints && part.skinWeights) {
+        joints.set(Array.from(part.skinJoints));
+        weights.set(Array.from(part.skinWeights));
+      } else {
+        for (let v = 0; v < vertexCount; v++) {
+          joints[v * 4] = part.joint as number;
+          weights[v * 4] = 1;
+        }
       }
       const jointView = pushView(joints, 34962);
       accessors.push({
@@ -271,7 +292,7 @@ export function buildGlb(
   const partNodeStart = nodes.length;
   parts.forEach((part, i) => {
     const node: Record<string, unknown> = { name: part.name, mesh: i };
-    if (skin && part.joint !== undefined) node.skin = 0;
+    if (skin && (part.joint !== undefined || part.skinJoints)) node.skin = 0;
     nodes.push(node);
   });
   const rootChildren: number[] = [];

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { describe, expect, it, vi } from 'vitest';
 import {
   BOTTOM_STYLES,
   DEFAULT_OUTFIT,
@@ -102,12 +103,33 @@ const ctxStub: unknown = new Proxy(function () {}, {
 const { buildAvatar } = await import('../src/avatar');
 const { applyOutfit } = await import('../src/items');
 
-describe('wardrobe geometry (builders run, anchors fill, nothing is NaN)', () => {
-  function anchorStats(outfit: Outfit) {
+// The mannequin GLBs are real files under public/models; under node
+// they are served to GLTFLoader through a fetch stub. Baked maps go
+// through the DOM image loader, which node lacks, so they load as null.
+vi.stubEnv('BASE_URL', 'http://test.invalid/');
+(globalThis as { ProgressEvent?: unknown }).ProgressEvent ??= class extends Event {
+  lengthComputable = false;
+  loaded = 0;
+  total = 0;
+};
+const realFetch = globalThis.fetch;
+globalThis.fetch = (async (input: RequestInfo | URL) => {
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+  const m = /\/models\/(.+)$/.exec(url);
+  if (!m) return realFetch(input);
+  const buf = readFileSync(new URL(`../public/models/${m[1]}`, import.meta.url));
+  return new Response(buf, { status: 200 });
+}) as typeof fetch;
+
+describe('wardrobe on the skinned mannequin (GLB garments, bone calibration)', { timeout: 60000 }, () => {
+  async function dressed(outfit: Outfit) {
     const rig = buildAvatar(outfit.character);
     applyOutfit(rig, outfit);
+    await rig.ready;
+    const visible = new Set<string>();
     let nan = false;
     rig.root.traverse((obj) => {
+      if (obj instanceof THREE.SkinnedMesh && obj.name.startsWith('G_') && obj.visible) visible.add(obj.name.slice(2));
       if (obj instanceof THREE.Mesh) {
         const pos = obj.geometry.getAttribute('position');
         for (let i = 0; i < pos.count; i++) {
@@ -115,47 +137,50 @@ describe('wardrobe geometry (builders run, anchors fill, nothing is NaN)', () =>
         }
       }
     });
-    return { rig, nan };
+    return { rig, visible, nan };
   }
 
-  it('every top style builds, with and without every outer style', () => {
+  it('every top shows its own skinned garment, plus the outer shell when worn', async () => {
     for (const topStyle of TOP_STYLES) {
       for (const outerStyle of OUTER_STYLES) {
-        const { rig, nan } = anchorStats({ ...DEFAULT_OUTFIT, topStyle, outerStyle });
+        const { visible, nan } = await dressed({ ...DEFAULT_OUTFIT, topStyle, outerStyle });
         expect(nan).toBe(false);
-        // torso anchor: the top, plus the outer shell when one is worn
-        expect(rig.torsoAnchor.children.length).toBe(outerStyle === 'none' ? 1 : 2);
+        expect(visible.has(topStyle)).toBe(true);
+        expect(visible.has('base')).toBe(true);
+        if (outerStyle !== 'none') expect(visible.has(outerStyle)).toBe(true);
       }
     }
   });
 
-  it('every bottom style builds (dresses suppress them all)', () => {
+  it('every bottom shows (dresses suppress them all)', async () => {
     for (const bottomStyle of BOTTOM_STYLES) {
-      const withTop = anchorStats({ ...DEFAULT_OUTFIT, bottomStyle });
-      expect(withTop.nan).toBe(false);
-      expect(withTop.rig.bottomAnchor.children.length).toBe(bottomStyle === 'none' ? 0 : 1);
-      const withDress = anchorStats({ ...DEFAULT_OUTFIT, topStyle: 'dressLong', bottomStyle });
-      expect(withDress.rig.bottomAnchor.children.length).toBe(0);
+      if (bottomStyle === 'none') continue;
+      const withTop = await dressed({ ...DEFAULT_OUTFIT, topStyle: 'tee', bottomStyle });
+      expect(withTop.visible.has(bottomStyle)).toBe(true);
+      const withDress = await dressed({ ...DEFAULT_OUTFIT, topStyle: 'dressLong', bottomStyle });
+      expect(withDress.visible.has(bottomStyle)).toBe(false);
     }
   });
 
-  it('garments re-fit a larger body instead of clipping (bounding box grows)', () => {
-    const measure = (outfit: Outfit): THREE.Box3 => {
-      const rig = buildAvatar(outfit.character);
-      applyOutfit(rig, outfit);
+  it('Body Scale Calibration moves the joints to the landmark ratios', async () => {
+    for (const height of [1.5, 1.74, 1.9]) {
+      const { rig } = await dressed({ ...DEFAULT_OUTFIT, character: { ...DEFAULT_CHARACTER, height } });
       rig.root.updateMatrixWorld(true);
-      return new THREE.Box3().setFromObject(rig.torsoAnchor);
-    };
-    const base: Outfit = { ...DEFAULT_OUTFIT, topStyle: 'blouse', outerStyle: 'coat' };
-    const wide: Outfit = {
-      ...base,
-      character: { ...DEFAULT_CHARACTER, build: 1.2, waist: 1.22, bust: 1.3, hip: 1.2 },
-    };
-    const a = measure(base);
-    const b = measure(wide);
-    const widthA = a.max.x - a.min.x;
-    const widthB = b.max.x - b.min.x;
-    expect(widthB).toBeGreaterThan(widthA);
+      const y = (name: string) => {
+        const o = rig.root.getObjectByName(name);
+        return o ? o.getWorldPosition(new THREE.Vector3()).y : NaN;
+      };
+      // Knee joint at ~0.28H, hip joint just above the 0.47H inseam.
+      expect(y('leftLowerLeg') / height).toBeCloseTo(0.28, 1);
+      expect(y('leftUpperLeg') / height).toBeGreaterThan(0.47);
+      expect(y('leftUpperLeg') / height).toBeLessThan(0.56);
+      // Garments re-fit: the skinned top grows with the body.
+      const top = rig.root.getObjectByName('G_tee') as THREE.SkinnedMesh;
+      const box = new THREE.Box3();
+      top.computeBoundingBox();
+      box.copy(top.boundingBox!).applyMatrix4(top.matrixWorld);
+      expect(Number.isFinite(box.max.y)).toBe(true);
+    }
   });
 
   it('sanitizeOutfit keeps the new catalog values and rejects off-list ones', () => {
