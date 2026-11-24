@@ -125,6 +125,8 @@ import {
   type ImagingSettings,
 } from './imaging';
 import { createVrRig, vrActionId, type VrLookEntry, type VrRig } from './vr';
+import { FrameDiagnostics, diagLogJson, formatDiagLines, type DiagEntry } from './diagnostics';
+import { createGpuTimer, type GpuTimer } from './gputimer';
 
 const LANG_KEY = 'fitting-room.lang.v1';
 const canvas = document.getElementById('gl') as HTMLCanvasElement;
@@ -137,6 +139,13 @@ const stage = createStage(canvas);
 // host function it calls exists; outfit changes reach it
 // through update() below, null-safely until then.
 let vrRig: VrRig | null = null;
+// Performance diagnostics state (the logic is further down, by the
+// frame loop); declared here because the VR panel reads it.
+const diag = new FrameDiagnostics();
+let diagShown = new URLSearchParams(location.search).has('diag');
+let diagRecording = false;
+let gpuTimer: GpuTimer | null | undefined;
+let diagBox: { root: HTMLElement; text: HTMLElement } | null = null;
 // The roster is the save system (roster.ts): the person on
 // stage is the roster's current entry, and every change is
 // autosaved back into that entry. The first load migrates the
@@ -2095,6 +2104,8 @@ vrRig = createVrRig(stage, {
   getLooks: (): VrLookEntry[] => readStoredLooks().map((l) => ({ id: l.id, name: l.name })),
   applyLook: applyStoredLook,
   takePhoto: takeVrPhoto,
+  toggleDiagnostics: () => setDiagShown(!diagShown),
+  diagnosticsOn: () => diagShown,
 });
 
 // The "VRで入る" entry: shown only when an immersive-vr session
@@ -2186,9 +2197,109 @@ stage.renderer.xr.addEventListener('sessionstart', renderVrButton);
 stage.renderer.xr.addEventListener('sessionend', renderVrButton);
 void initVrEntry();
 
+// ---- performance diagnostics (diagnostics.ts) ----
+// Recording runs whenever a VR session is presenting (a handful
+// of additions per frame, one log entry per window) and whenever
+// the overlay is shown; the overlay itself — the board in VR,
+// the box on the flat screen, the GPU timer query — only exists
+// while shown. Toggle: the panel's diagnostics chip in VR, or
+// `?diag` in the URL. The log never leaves the device unless the
+// user copies or saves it.
+
+function diagBudgetMs(): number {
+  if (!stage.isPresenting()) return 1000 / 60;
+  const rate = (xrSession as (XRSession & { frameRate?: number }) | null)?.frameRate;
+  return 1000 / (rate && rate > 0 ? rate : 72);
+}
+
+function diagJson(): string {
+  return diagLogJson(diag.log(), {
+    savedAt: new Date().toISOString(),
+    userAgent: navigator.userAgent,
+    gpuTimer: gpuTimer != null,
+  });
+}
+
+function renderDiag(): void {
+  const lines = formatDiagLines(diag.latest());
+  vrRig?.setDiagLines(diagShown && stage.isPresenting() ? lines : null);
+  if (!diagShown) {
+    if (diagBox) diagBox.root.hidden = true;
+    return;
+  }
+  if (!diagBox) {
+    const root = document.createElement('div');
+    root.id = 'diag';
+    root.style.cssText =
+      'position:fixed;left:8px;bottom:8px;z-index:30;background:rgba(22,19,15,.86);color:#e8e0d0;' +
+      'font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;padding:8px 10px;border-radius:8px;max-width:calc(100vw - 16px)';
+    const text = document.createElement('pre');
+    text.style.cssText = 'margin:0 0 6px;white-space:pre-wrap';
+    const button = (label: string, onClick: () => void): HTMLButtonElement => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.style.cssText = 'font:inherit;margin-right:6px';
+      b.addEventListener('click', onClick);
+      return b;
+    };
+    root.append(
+      text,
+      button('Copy log', () => void navigator.clipboard?.writeText(diagJson()).catch(() => undefined)),
+      button('Save log', () => downloadBlob(new Blob([diagJson()], { type: 'application/json' }), 'fitting-room-diagnostics.json')),
+      button('Clear', () => {
+        diag.clear();
+        renderDiag();
+      }),
+      button('Hide', () => setDiagShown(false)),
+    );
+    document.body.append(root);
+    diagBox = { root, text };
+  }
+  diagBox.root.hidden = false;
+  diagBox.text.textContent = `${lines.join('\n')}\nlog: ${diag.log().length} entries`;
+}
+
+function setDiagShown(on: boolean): void {
+  diagShown = on;
+  renderDiag();
+}
+stage.renderer.xr.addEventListener('sessionstart', renderDiag);
+stage.renderer.xr.addEventListener('sessionend', renderDiag);
+if (diagShown) renderDiag();
+
+const diagFlushContext = (): { geometries: number; textures: number; programs: number; quality: number } => {
+  const info = stage.renderer.info;
+  return {
+    geometries: info.memory.geometries,
+    textures: info.memory.textures,
+    programs: info.programs?.length ?? 0,
+    quality: stage.xrQualityLevel(),
+  };
+};
+
 const clock = new THREE.Clock();
 const gazePos = new THREE.Vector3();
 function loop(): void {
+  // Diagnostics: renderer.info resets per render() call by default,
+  // and the mirror renders the scene again inside the main render,
+  // so while recording the counters are reset once per frame here
+  // and read after the frame — all passes counted.
+  const recording = diagShown || stage.isPresenting();
+  if (recording !== diagRecording) {
+    diagRecording = recording;
+    stage.renderer.info.autoReset = !recording;
+    diag.restart();
+  }
+  let frameStart = 0;
+  if (recording) {
+    frameStart = performance.now();
+    stage.renderer.info.reset();
+    if (diagShown) {
+      if (gpuTimer === undefined) gpuTimer = createGpuTimer(stage.renderer.getContext());
+      gpuTimer?.begin();
+    }
+  }
   const tSec = clock.getElapsedTime();
   // The camera's world position is the gaze target: the
   // avatar's eyes track whoever is looking at it (see avatar.ts
@@ -2210,6 +2321,23 @@ function loop(): void {
       applyViewpoint(medianOf(headsetSamples));
       headsetSamples = [];
     }
+  }
+  if (recording) {
+    if (gpuTimer) {
+      gpuTimer.end();
+      const gpuMs = gpuTimer.poll();
+      if (gpuMs !== null) diag.noteGpuMs(gpuMs);
+    }
+    const info = stage.renderer.info.render;
+    const entry = diag.frame(
+      frameStart,
+      performance.now() - frameStart,
+      info.calls,
+      info.triangles,
+      diagBudgetMs(),
+      diagFlushContext,
+    );
+    if (entry && diagShown) renderDiag();
   }
   if (vrPhotoRequested) {
     vrPhotoRequested = false;
@@ -2338,6 +2466,9 @@ interface FittingRoomBridge {
   shadowStats(): { updates: number; mapPx: number; soft: boolean };
   /** Compiled shader programs (verifies the warm-up: stays flat while changing clothes). */
   programCount(): number;
+  /** Performance diagnostics (diagnostics.ts): overlay state and the log. */
+  getDiagnostics(): { shown: boolean; log: DiagEntry[] };
+  setDiagnostics(on: boolean): void;
   /** Aim the flat camera at the VR panel (evidence framing;
    *  the panel is furniture beside the rack, so the default
    *  home view does not show it). */
@@ -2497,6 +2628,8 @@ const bridge: FittingRoomBridge = {
   },
   shadowStats: () => stage.shadowStats(),
   programCount: () => stage.renderer.info.programs?.length ?? 0,
+  getDiagnostics: () => ({ shown: diagShown, log: [...diag.log()] }),
+  setDiagnostics: (on) => setDiagShown(on),
   viewVrPanel: () => {
     stage.camera.position.set(0.55, 1.6, 1.85);
     stage.controls.target.set(-1.35, 1.25, -0.45);
