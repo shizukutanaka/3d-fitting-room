@@ -2546,6 +2546,8 @@ void rig.ready
     // Visibility was restored to what it was before the warm-up;
     // re-apply in case the outfit changed meanwhile.
     applyOutfit(rig, outfit);
+    // The warm frames drew the shadow map from partial scenes.
+    stage.invalidateShadows();
     bridge.ready = true;
     renderOptions();
   })

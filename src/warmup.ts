@@ -33,6 +33,14 @@ export interface WarmupRenderer {
   initTexture(texture: THREE.Texture): void;
   compileAsync(scene: THREE.Object3D, camera: THREE.Camera): Promise<unknown>;
   render(scene: THREE.Object3D, camera: THREE.Camera): void;
+  /** With shadowMap.autoUpdate off (scene.ts), each warm frame
+   *  requests a shadow pass so the depth programs are compiled. */
+  shadowMap?: { needsUpdate: boolean };
+}
+
+function renderWarm(renderer: WarmupRenderer, scene: THREE.Object3D, camera: THREE.Camera): void {
+  if (renderer.shadowMap) renderer.shadowMap.needsUpdate = true;
+  renderer.render(scene, camera);
 }
 
 export interface WarmupOptions {
@@ -116,10 +124,10 @@ export function warmDepthVariants(renderer: WarmupRenderer, scene: THREE.Object3
     for (const group of variants.values()) {
       const other = (group[0] as THREE.SkinnedMesh).isSkinnedMesh === true ? fixed : skinned;
       other.visible = true;
-      renderer.render(scene, camera);
+      renderWarm(renderer, scene, camera);
       other.visible = false;
       for (const m of group) m.visible = true;
-      renderer.render(scene, camera);
+      renderWarm(renderer, scene, camera);
       for (const m of group) m.visible = false;
     }
   } finally {
@@ -173,7 +181,7 @@ export async function warmUpScene(
     } finally {
       clearTimeout(timer);
     }
-    renderer.render(scene, camera);
+    renderWarm(renderer, scene, camera);
     warmDepthVariants(renderer, scene, camera);
   } finally {
     options.reveal.forEach((o, i) => {
