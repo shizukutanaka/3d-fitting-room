@@ -13,6 +13,9 @@ import {
   saveCalibration,
   solveBoneScales,
   vrEyeHeight,
+  alignViewpoint,
+  estimateHeightFromEye,
+  medianOf,
   type SourceJoints,
 } from '../src/bodyscale';
 
@@ -115,5 +118,62 @@ describe('Body Scale Calibration', () => {
   it('is optional: an uncalibrated visit uses 170 cm, standard legs and true world scale', () => {
     expect(DEFAULT_CALIBRATION).toEqual({ heightM: 1.7, legRatio: 'standard', worldScale: 1 });
     expect(clampCalibration({})).toEqual(DEFAULT_CALIBRATION);
+  });
+});
+
+describe('VR viewpoint alignment (local-floor)', () => {
+  it('entered height, standing: the real floor is kept', () => {
+    const v = alignViewpoint(1.6, vrEyeHeight(1.6) - 0.03);
+    expect(v).toEqual({ heightM: 1.6, source: 'entered', seated: false, floorOffsetM: 0 });
+    // A taller reading than expected (heels, headset fit) does not move the floor either.
+    expect(alignViewpoint(1.6, 1.62).floorOffsetM).toBe(0);
+  });
+
+  it('entered height, seated: the eyes are raised to the standing eye level', () => {
+    const v = alignViewpoint(1.8, 1.15);
+    expect(v.source).toBe('entered');
+    expect(v.seated).toBe(true);
+    expect(v.heightM).toBe(1.8);
+    expect(1.15 + v.floorOffsetM).toBeCloseTo(vrEyeHeight(1.8), 6);
+  });
+
+  it('no height, standing: stature is estimated from the eye height', () => {
+    const v = alignViewpoint(null, vrEyeHeight(1.58));
+    expect(v.source).toBe('estimated');
+    expect(v.seated).toBe(false);
+    expect(v.heightM).toBeCloseTo(1.58, 6);
+    expect(v.floorOffsetM).toBe(0);
+    // The estimate stays inside the supported stature range.
+    expect(alignViewpoint(null, 2.2).heightM).toBe(1.95);
+    expect(estimateHeightFromEye(1.0)).toBe(1.45);
+  });
+
+  it('no height, seated or no floor reported: the default stature, eyes at its standing level', () => {
+    for (const y of [1.2, 0, -0.1]) {
+      const v = alignViewpoint(null, y);
+      expect(v.source).toBe('default');
+      expect(v.seated).toBe(true);
+      expect(v.heightM).toBe(DEFAULT_CALIBRATION.heightM);
+      expect(Math.max(0, y) + v.floorOffsetM).toBeCloseTo(vrEyeHeight(DEFAULT_CALIBRATION.heightM), 6);
+    }
+  });
+
+  it('follows the world-scale trim of the player rig', () => {
+    const s = 1 / 1.1;
+    const v = alignViewpoint(1.7, 1.1, s);
+    // World eye = offset + headset * scale = standing eye * scale.
+    expect(v.floorOffsetM + 1.1 * s).toBeCloseTo(vrEyeHeight(1.7) * s, 6);
+  });
+
+  it('an unusable reading changes nothing; out-of-range entries are clamped', () => {
+    expect(alignViewpoint(1.7, NaN)).toEqual({ heightM: 1.7, source: 'entered', seated: false, floorOffsetM: 0 });
+    expect(alignViewpoint(null, NaN)).toEqual({ heightM: 1.7, source: 'default', seated: false, floorOffsetM: 0 });
+    expect(alignViewpoint(3, 1.8).heightM).toBe(1.95);
+  });
+
+  it('takes the median of the sampled headset heights', () => {
+    expect(medianOf([0, 1.5, 1.52, 1.51, 9])).toBe(1.51);
+    expect(medianOf([1.5, 1.6])).toBeCloseTo(1.55, 6);
+    expect(Number.isNaN(medianOf([]))).toBe(true);
   });
 });
