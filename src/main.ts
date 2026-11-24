@@ -176,6 +176,7 @@ stage.scene.add(rig.root);
 stage.player.scale.setScalar(1 / calibration.worldScale);
 stage.setSubjectHeight(outfit.character.height);
 applyOutfit(rig, outfit);
+stage.invalidateShadows();
 
 type TabId =
   | 'looks'
@@ -377,6 +378,7 @@ function update(next: Outfit): void {
   rig.setCharacter(outfit.character);
   stage.setSubjectHeight(outfit.character.height);
   applyOutfit(rig, outfit);
+  stage.invalidateShadows();
   persist();
   renderOptions();
   // The VR panel shows the same state; a committed change
@@ -471,6 +473,7 @@ function showCharacterPreview(c: CharacterParams): void {
   rig.setCharacter(c);
   stage.setSubjectHeight(c.height);
   applyOutfit(rig, { ...outfit, character: c });
+  stage.invalidateShadows();
 }
 
 function onBlendGenerate(): void {
@@ -2264,6 +2267,8 @@ interface FittingRoomBridge {
   /** Draw-call measurement from the stage (scene.ts): one
    *  frame with the mirror's reflection pass and without it. */
   measureStageStats(): { withMirror: number; withoutMirror: number; triangles: number };
+  /** Shadow map redraw count and current size / filter (scene.ts). */
+  shadowStats(): { updates: number; mapPx: number; soft: boolean };
   /** Aim the flat camera at the VR panel (evidence framing;
    *  the panel is furniture beside the rack, so the default
    *  home view does not show it). */
@@ -2414,6 +2419,7 @@ const bridge: FittingRoomBridge = {
     });
   },
   measureStageStats: () => stage.measureDrawCalls(),
+  shadowStats: () => stage.shadowStats(),
   viewVrPanel: () => {
     stage.camera.position.set(0.55, 1.6, 1.85);
     stage.controls.target.set(-1.35, 1.25, -0.45);
@@ -2422,6 +2428,7 @@ const bridge: FittingRoomBridge = {
 };
 (window as unknown as { __fittingRoom: FittingRoomBridge }).__fittingRoom = bridge;
 // Ready once the mannequin asset is on stage (avatar.ts loads it).
+stage.watchShadowCasters(rig.root);
 void rig.ready.then(() => {
   bridge.ready = true;
   renderOptions();
