@@ -9,8 +9,11 @@ import {
   WORLD_SCALE_MAX,
   WORLD_SCALE_MIN,
   DEFAULT_CALIBRATION,
+  alignViewpoint,
   clampCalibration,
   loadCalibration,
+  medianOf,
+  type ViewpointAlignment,
   saveCalibration,
   type BodyCalibration,
 } from './bodyscale';
@@ -164,7 +167,52 @@ function loadFigureChoice(): FigureId {
     return 'a';
   }
 }
+// VR viewpoint alignment (bodyscale.ts alignViewpoint). A height
+// counts as entered when the user saved a calibration or a person
+// before, or sets one now; otherwise the default applies and a
+// standing headset height may stand in for it during a session.
+// The estimate is never written to storage.
+let heightEntered = savedCalibration !== null || hadSavedPerson;
+let sessionHeight: number | null = null;
+let viewpoint: ViewpointAlignment | null = null;
+const VIEWPOINT_SAMPLES = 45;
+let headsetSamples: number[] = [];
+/** Put a person on stage; a session height estimate overrides
+ *  the stored stature for display only. */
+function showCharacter(c: CharacterParams): void {
+  const shown = sessionHeight === null ? c : { ...c, height: sessionHeight };
+  rig.setCharacter(shown);
+  stage.setSubjectHeight(shown.height);
+}
+function applyViewpoint(headsetYM: number): ViewpointAlignment {
+  const v = alignViewpoint(heightEntered ? calibration.heightM : null, headsetYM, stage.player.scale.y);
+  viewpoint = v;
+  stage.player.position.y = v.floorOffsetM;
+  const next = v.source === 'estimated' ? v.heightM : null;
+  if (next !== sessionHeight) {
+    sessionHeight = next;
+    showCharacter(outfit.character);
+  }
+  return v;
+}
+function endViewpoint(): void {
+  headsetSamples = [];
+  viewpoint = null;
+  if (sessionHeight !== null) {
+    sessionHeight = null;
+    showCharacter(outfit.character);
+  }
+}
 function setCalibration(next: Partial<BodyCalibration>): void {
+  if (next.heightM !== undefined) {
+    heightEntered = true;
+    sessionHeight = null;
+    // An entered height replaces the estimate: measure again.
+    if (viewpoint) {
+      viewpoint = null;
+      headsetSamples = [];
+    }
+  }
   calibration = clampCalibration({ ...calibration, ...next });
   saveCalibration(calibration);
   // The trim scales the player rig, so the room (and the person)
@@ -375,8 +423,7 @@ function update(next: Outfit): void {
   // changes and re-selecting the same item do not touch it).
   if (!sameLook(lookOf(outfit), lookOf(sanitized))) prevLook = lookOf(outfit);
   outfit = sanitized;
-  rig.setCharacter(outfit.character);
-  stage.setSubjectHeight(outfit.character.height);
+  showCharacter(outfit.character);
   applyOutfit(rig, outfit);
   stage.invalidateShadows();
   persist();
@@ -412,8 +459,7 @@ function patchCharacter(patch: Partial<CharacterParams>): void {
     ...outfit,
     character: sanitizeCharacter({ ...outfit.character, ...patch }),
   };
-  rig.setCharacter(outfit.character);
-  stage.setSubjectHeight(outfit.character.height);
+  showCharacter(outfit.character);
   persist();
   const seedEl = document.getElementById('seed-value');
   if (seedEl) seedEl.textContent = encodeSeed(outfit);
@@ -470,8 +516,7 @@ let blendChild: CharacterParams | null = null;
  *  path for a synthesized person (and, with the current person,
  *  the way a preview is taken down). */
 function showCharacterPreview(c: CharacterParams): void {
-  rig.setCharacter(c);
-  stage.setSubjectHeight(c.height);
+  showCharacter(c);
   applyOutfit(rig, { ...outfit, character: c });
   stage.invalidateShadows();
 }
@@ -2153,12 +2198,25 @@ function loop(): void {
   stage.tick(tSec);
   vrRig?.update();
   stage.renderer.render(stage.scene, stage.camera);
+  // Viewpoint alignment: once per session (and again after the
+  // height is changed), from the median of the first headset
+  // heights. In VR three.js writes the local-floor pose to the
+  // camera's local position during render.
+  if (viewpoint === null && stage.renderer.xr.isPresenting) {
+    const y = stage.camera.position.y;
+    if (Number.isFinite(y)) headsetSamples.push(y);
+    if (headsetSamples.length >= VIEWPOINT_SAMPLES) {
+      applyViewpoint(medianOf(headsetSamples));
+      headsetSamples = [];
+    }
+  }
   if (vrPhotoRequested) {
     vrPhotoRequested = false;
     void deliverVrPhoto();
   }
 }
 stage.renderer.setAnimationLoop(loop);
+stage.renderer.xr.addEventListener('sessionend', endViewpoint);
 
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').catch(() => {
@@ -2267,6 +2325,12 @@ interface FittingRoomBridge {
   /** Draw-call measurement from the stage (scene.ts): one
    *  frame with the mirror's reflection pass and without it. */
   measureStageStats(): { withMirror: number; withoutMirror: number; triangles: number };
+  /** VR viewpoint alignment state (bodyscale.ts alignViewpoint). */
+  getViewpoint(): { entered: boolean; shownHeightM: number; playerY: number; alignment: ViewpointAlignment | null };
+  /** Apply the alignment for a headset height, as the first frames
+   *  of a VR session do (verification without a headset). */
+  simulateHeadsetHeight(headsetYM: number): ViewpointAlignment;
+  endViewpoint(): void;
   /** Shadow map redraw count and current size / filter (scene.ts). */
   shadowStats(): { updates: number; mapPx: number; soft: boolean };
   /** Aim the flat camera at the VR panel (evidence framing;
@@ -2419,6 +2483,12 @@ const bridge: FittingRoomBridge = {
     });
   },
   measureStageStats: () => stage.measureDrawCalls(),
+  getViewpoint: () => ({ entered: heightEntered, shownHeightM: sessionHeight ?? outfit.character.height, playerY: stage.player.position.y, alignment: viewpoint }),
+  simulateHeadsetHeight: (y) => applyViewpoint(y),
+  endViewpoint: () => {
+    endViewpoint();
+    stage.player.position.y = 0;
+  },
   shadowStats: () => stage.shadowStats(),
   viewVrPanel: () => {
     stage.camera.position.set(0.55, 1.6, 1.85);
