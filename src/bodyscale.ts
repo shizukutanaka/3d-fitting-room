@@ -124,6 +124,72 @@ export function vrEyeHeight(heightM: number): number {
   return VR_EYE_RATIO * heightM;
 }
 
+// ---- VR viewpoint alignment (local-floor) ----
+//
+// In a 'local-floor' reference space y = 0 is the real floor, so
+// the headset's y is the user's real eye height at that moment.
+// That one number is compared with the height the user entered
+// (or stands in for it when none was entered):
+//
+//   height entered, standing   real floor = room floor; nothing moves
+//   height entered, seated     the room floor is lowered so the eyes
+//                              are at the entered standing eye level
+//   no height, standing        stature is estimated as eye / 0.945 and
+//                              the mannequin takes it for this session
+//   no height, seated          default stature; floor lowered likewise
+//
+// "Seated" means the headset is clearly below standing eye level
+// (also the case when a runtime reports no floor at all).
+
+/** Below this fraction of the standing eye height the user is
+ *  taken to be seated (a relaxed standing posture stays above). */
+export const STANDING_MIN_FRACTION = 0.85;
+
+export type HeightSource = 'entered' | 'estimated' | 'default';
+
+export interface ViewpointAlignment {
+  /** Stature the mannequin should stand at. */
+  heightM: number;
+  source: HeightSource;
+  seated: boolean;
+  /** How far to raise the player rig (world metres) so the eyes
+   *  sit at the standing eye level of heightM; 0 when standing. */
+  floorOffsetM: number;
+}
+
+/** Stature from a standing eye height, within the supported range. */
+export function estimateHeightFromEye(eyeM: number): number {
+  return clampCalibration({ heightM: eyeM / VR_EYE_RATIO }).heightM;
+}
+
+/** enteredHeightM: the height the user gave, or null when they
+ *  never did. headsetYM: headset height above the local floor in
+ *  real metres. playerScale: the rig scale (1 / worldScale trim). */
+export function alignViewpoint(enteredHeightM: number | null, headsetYM: number, playerScale = 1): ViewpointAlignment {
+  const entered = enteredHeightM !== null && Number.isFinite(enteredHeightM);
+  const base = clampCalibration({ heightM: entered ? (enteredHeightM as number) : DEFAULT_CALIBRATION.heightM }).heightM;
+  const source: HeightSource = entered ? 'entered' : 'default';
+  if (!Number.isFinite(headsetYM)) return { heightM: base, source, seated: false, floorOffsetM: 0 };
+  const y = Math.max(0, headsetYM);
+  if (entered) {
+    if (y >= STANDING_MIN_FRACTION * vrEyeHeight(base)) return { heightM: base, source, seated: false, floorOffsetM: 0 };
+    return { heightM: base, source, seated: true, floorOffsetM: (vrEyeHeight(base) - y) * playerScale };
+  }
+  // Without an entered height, only an eye level a standing adult
+  // in the supported range could have is read as a stature.
+  if (y >= vrEyeHeight(1.45)) return { heightM: estimateHeightFromEye(y), source: 'estimated', seated: false, floorOffsetM: 0 };
+  return { heightM: base, source, seated: true, floorOffsetM: (vrEyeHeight(base) - y) * playerScale };
+}
+
+/** Median of a few headset-height samples (robust to the first
+ *  frames of a session, where the pose can still be settling). */
+export function medianOf(samples: readonly number[]): number {
+  if (samples.length === 0) return NaN;
+  const s = [...samples].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
 /** Solve the per-bone scales that move the source joints onto the
  *  target landmarks while keeping the stature exact. */
 export function solveBoneScales(src: SourceJoints, heightM: number, leg: LegRatio): BoneScales {
