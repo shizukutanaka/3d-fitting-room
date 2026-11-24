@@ -14,7 +14,8 @@ import {
   saveCalibration,
   type BodyCalibration,
 } from './bodyscale';
-import { applyOutfit } from './items';
+import { applyOutfit, buildWarmupItems } from './items';
+import { warmUpScene, type WarmupStats } from './warmup';
 import { createStage } from './scene';
 import { composeShareCard, composeShareCardFromImage, downloadBlob } from './share';
 import {
@@ -2167,6 +2168,8 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
 // devtools) drive the app and confirm rendering/export really work.
 interface FittingRoomBridge {
   ready: boolean;
+  /** Shader/texture warm-up result (warmup.ts); null until it ran. */
+  warmup: WarmupStats | null;
   getOutfit(): Outfit;
   setOutfit(partial: Partial<Outfit>): void;
   getSeed(): string;
@@ -2264,6 +2267,8 @@ interface FittingRoomBridge {
   /** Draw-call measurement from the stage (scene.ts): one
    *  frame with the mirror's reflection pass and without it. */
   measureStageStats(): { withMirror: number; withoutMirror: number; triangles: number };
+  /** Compiled shader programs (verifies the warm-up: stays flat while changing clothes). */
+  programCount(): number;
   /** Aim the flat camera at the VR panel (evidence framing;
    *  the panel is furniture beside the rack, so the default
    *  home view does not show it). */
@@ -2271,6 +2276,7 @@ interface FittingRoomBridge {
 }
 const bridge: FittingRoomBridge = {
   ready: false,
+  warmup: null,
   getOutfit: () => ({ ...outfit }),
   setOutfit: (partial) => update({ ...outfit, ...partial }),
   getSeed: () => encodeSeed(outfit),
@@ -2414,6 +2420,7 @@ const bridge: FittingRoomBridge = {
     });
   },
   measureStageStats: () => stage.measureDrawCalls(),
+  programCount: () => stage.renderer.info.programs?.length ?? 0,
   viewVrPanel: () => {
     stage.camera.position.set(0.55, 1.6, 1.85);
     stage.controls.target.set(-1.35, 1.25, -0.45);
@@ -2422,10 +2429,50 @@ const bridge: FittingRoomBridge = {
 };
 (window as unknown as { __fittingRoom: FittingRoomBridge }).__fittingRoom = bridge;
 // Ready once the mannequin asset is on stage (avatar.ts loads it).
-void rig.ready.then(() => {
-  bridge.ready = true;
-  renderOptions();
-});
+// ...and the wardrobe is warm (warmup.ts): every garment and
+// accessory has its shader programs compiled and its textures
+// uploaded behind the loading screen, so the first change of
+// clothes does not hitch. A failed warm-up never blocks entry.
+const loadingEl = document.getElementById('loading');
+const loadingText = document.getElementById('loading-text');
+if (loadingText) loadingText.textContent = t('ui.loading');
+function hideLoading(): void {
+  if (!loadingEl) return;
+  loadingEl.classList.add('done');
+  window.setTimeout(() => loadingEl.remove(), 400);
+}
+void rig.ready
+  .then(async () => {
+    try {
+      const garments: THREE.Object3D[] = [];
+      rig.root.traverse((obj) => {
+        if (!(obj instanceof THREE.SkinnedMesh)) return;
+        if (obj.name.startsWith('G_') || obj.parent?.name.startsWith('G_')) garments.push(obj);
+      });
+      const extras = buildWarmupItems(rig);
+      // Pumps stand on heel posts: plain (unskinned) meshes in the
+      // shoe's material, which is a program variant of its own.
+      const shoe = garments.find((g) => g.name === 'G_shoesLow' || g.parent?.name === 'G_shoesLow');
+      if (shoe) {
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.005, 0.02, 6), (shoe as THREE.Mesh).material);
+        post.castShadow = true;
+        extras.add(post);
+      }
+      bridge.warmup = await warmUpScene(stage.renderer, stage.scene, stage.camera, {
+        reveal: garments,
+        extras,
+        extrasParent: rig.root,
+      });
+    } catch (err) {
+      console.warn('warm-up skipped', err);
+    }
+    // Visibility was restored to what it was before the warm-up;
+    // re-apply in case the outfit changed meanwhile.
+    applyOutfit(rig, outfit);
+    bridge.ready = true;
+    renderOptions();
+  })
+  .finally(hideLoading);
 
 // ---- Body Scale Calibration dialog (optional, from the character tab) ----
 // Every field is optional; an empty height keeps the current one.

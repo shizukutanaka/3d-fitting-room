@@ -7,6 +7,7 @@
 import * as THREE from 'three';
 import type { AccessoryFit, AvatarRig } from './avatar';
 import { fabricTextures, leatherTextures, ribbedBump } from './textures';
+import { ACCESSORIES, GLASSES, HATS } from './outfit';
 import type {
   AccessoryId,
   GlassesId,
@@ -371,6 +372,29 @@ function applyAccessory(rig: AvatarRig, outfit: Outfit): void {
   clearAnchor(rig.bagAnchor);
   const acc = buildAccessory(outfit.accessory, rig.fit());
   if (acc) (acc.anchor === 'neck' ? rig.neckAnchor : rig.bagAnchor).add(acc.group);
+}
+
+/** One of every procedural accessory (each hat, each pair of
+ *  glasses, necklace, scarf, bag), for the shader warm-up
+ *  (warmup.ts). Not attached to the rig's anchors; the drape-fitted
+ *  ones are skipped until the figure is loaded. */
+export function buildWarmupItems(rig: AvatarRig): THREE.Group {
+  const all = new THREE.Group();
+  all.name = 'warmup-items';
+  for (const hat of HATS) {
+    const g = buildHat(hat);
+    if (g) all.add(g);
+  }
+  for (const glasses of GLASSES) {
+    const g = buildGlasses(glasses);
+    if (g) all.add(g);
+  }
+  const fit = rig.fit();
+  for (const accessory of ACCESSORIES) {
+    const acc = buildAccessory(accessory, fit);
+    if (acc) all.add(acc.group);
+  }
+  return all;
 }
 
 /** Swap the visible items on the rig to match the outfit. Pose is
