@@ -11,7 +11,8 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { fabricTextures, plasterTexture, woodFloorTexture } from './textures';
-import { XR_QUALITY_STEPS, nextXrQualityLevel } from './vr';
+import { XR_QUALITY_STEPS, nextXrQualityLevel, xrStartLevel } from './vr';
+import { MotionGate } from './shadowgate';
 
 export interface Stage {
   scene: THREE.Scene;
@@ -44,6 +45,15 @@ export interface Stage {
    *  doubles the scene's draw calls — the number the XR mirror
    *  resolution decision (below) is based on. */
   measureDrawCalls(): { withMirror: number; withoutMirror: number; triangles: number };
+  /** Redraw the shadow map on the next frame (something that casts
+   *  a shadow changed in a way the motion watch cannot see: a
+   *  garment shown or hidden, an accessory swapped). */
+  invalidateShadows(): void;
+  /** Watch this subtree's bones: the shadow map is redrawn when
+   *  they move (pose change, sway, spin, rescale). */
+  watchShadowCasters(root: THREE.Object3D): void;
+  /** Shadow map redraw requests so far, and its current size / filter. */
+  shadowStats(): { updates: number; mapPx: number; soft: boolean };
 }
 
 /** Where a VR user starts: standing on the floor 1.9 m in front
@@ -57,6 +67,8 @@ export const XR_SPAWN = { x: 0, z: 1.9 };
  *  frame rates. See DESIGN.md §22. */
 export const MIRROR_FLAT_PX = 1024;
 export const MIRROR_XR_PX = 512;
+/** Shadow map edge on the flat screen (XR steps: vr.ts). */
+export const SHADOW_FLAT_PX = 2048;
 
 function mesh(geo: THREE.BufferGeometry, material: THREE.Material, x = 0, y = 0, z = 0): THREE.Mesh {
   const m = new THREE.Mesh(geo, material);
@@ -96,6 +108,10 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // The shadow map is redrawn on demand, not every frame: see
+  // "shadow map on demand" below and shadowgate.ts.
+  renderer.shadowMap.autoUpdate = false;
+  renderer.shadowMap.needsUpdate = true;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.1;
@@ -152,7 +168,7 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
   const key = new THREE.SpotLight('#fff1dd', 140, 0, 0.46, 0.8, 1.8);
   key.position.set(1.8, 3.2, 2.4);
   key.castShadow = true;
-  key.shadow.mapSize.set(2048, 2048);
+  key.shadow.mapSize.set(SHADOW_FLAT_PX, SHADOW_FLAT_PX);
   key.shadow.bias = -0.0003;
   key.shadow.normalBias = 0.02;
   key.shadow.camera.near = 0.5;
@@ -473,10 +489,90 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
   // everything is restored, so the flat screen resumes exactly
   // where it was.
   let xrQuality = 0;
+  /** The best level this session may hold (vr.ts xrStartLevel). */
+  let xrFloor = 0;
   let frameTimeSum = 0;
   let frameCount = 0;
   let lastFrameAt = -1;
   const XR_EVAL_FRAMES = 90;
+
+  // ---- shadow map on demand ----
+  // autoUpdate is off; the map is redrawn when (a) a watched bone
+  // moved more than SHADOW_MOVE_EPS since the map was last drawn,
+  // (b) invalidateShadows() was called, or (c) the map's size /
+  // filter / light changed. Bone positions are read from
+  // matrixWorld as left by the previous frame's render, so the
+  // check costs a few dozen float compares and no matrix work.
+  const shadowGate = new MotionGate();
+  let casterRoot: THREE.Object3D | null = null;
+  let casterBones: THREE.Object3D[] = [];
+  let casterSamples = new Float32Array(0);
+  let shadowUpdates = 0;
+
+  function invalidateShadows(): void {
+    if (!renderer.shadowMap.needsUpdate) shadowUpdates += 1;
+    renderer.shadowMap.needsUpdate = true;
+  }
+
+  function watchShadowCasters(root: THREE.Object3D): void {
+    casterRoot = root;
+    casterBones = [];
+    invalidateShadows();
+  }
+
+  function attached(obj: THREE.Object3D, root: THREE.Object3D): boolean {
+    for (let o: THREE.Object3D | null = obj; o; o = o.parent) if (o === root) return true;
+    return false;
+  }
+
+  function checkShadowCasters(): void {
+    if (!casterRoot) return;
+    // The figure is replaced when the body changes: re-collect.
+    if (casterBones.length === 0 || !attached(casterBones[0], casterRoot)) {
+      casterBones = [];
+      casterRoot.traverse((o) => {
+        if ((o as THREE.Bone).isBone) casterBones.push(o);
+      });
+      casterSamples = new Float32Array(casterBones.length * 3);
+      shadowGate.reset();
+      if (casterBones.length === 0) return;
+    }
+    for (let i = 0; i < casterBones.length; i++) {
+      const e = casterBones[i].matrixWorld.elements;
+      casterSamples[i * 3] = e[12];
+      casterSamples[i * 3 + 1] = e[13];
+      casterSamples[i * 3 + 2] = e[14];
+    }
+    if (shadowGate.moved(casterSamples)) invalidateShadows();
+  }
+
+  /** Shadow map size and filter. Changing the filter changes the
+   *  lit materials' shader variant, so they are flagged to rebuild. */
+  function setShadowQuality(px: number, soft: boolean): void {
+    const type = soft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+    if (key.shadow.mapSize.x !== px) {
+      key.shadow.mapSize.set(px, px);
+      key.shadow.map?.dispose();
+      key.shadow.map = null;
+    }
+    if (renderer.shadowMap.type !== type) {
+      renderer.shadowMap.type = type;
+      scene.traverse((o) => {
+        const mat = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+        if (!mat) return;
+        for (const m of Array.isArray(mat) ? mat : [mat]) m.needsUpdate = true;
+      });
+    }
+    invalidateShadows();
+  }
+
+  function shadowStats(): { updates: number; mapPx: number; soft: boolean } {
+    return {
+      updates: shadowUpdates,
+      mapPx: key.shadow.mapSize.x,
+      soft: renderer.shadowMap.type === THREE.PCFSoftShadowMap,
+    };
+  }
 
   function applyXrQuality(level: number): void {
     const step = XR_QUALITY_STEPS[level];
@@ -487,6 +583,7 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
       setMirrorResolution(step.mirrorPx);
     }
     key.castShadow = step.shadows;
+    setShadowQuality(step.shadowPx, step.shadowSoft);
     try {
       renderer.xr.setFoveation(step.foveation);
     } catch {
@@ -512,9 +609,10 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
     player.position.set(XR_SPAWN.x, 0, XR_SPAWN.z);
     player.rotation.set(0, 0, 0);
     controls.enabled = false;
-    xrQuality = 0;
+    xrFloor = xrStartLevel(navigator.userAgent);
+    xrQuality = xrFloor;
     resetFrameSampling();
-    applyXrQuality(0);
+    applyXrQuality(xrQuality);
   });
   renderer.xr.addEventListener('sessionend', () => {
     presenting = false;
@@ -525,6 +623,7 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
     resetFrameSampling();
     mirror.visible = true;
     key.castShadow = true;
+    setShadowQuality(SHADOW_FLAT_PX, true);
     setMirrorResolution(MIRROR_FLAT_PX);
     try {
       renderer.xr.setFoveation(1);
@@ -558,6 +657,7 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
   }
 
   function tick(): void {
+    checkShadowCasters();
     // In VR the headset owns the camera; the orbit controls
     // would fight it for the same transform.
     if (!presenting) {
@@ -572,7 +672,7 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
       frameTimeSum += now - lastFrameAt;
       frameCount += 1;
       if (frameCount >= XR_EVAL_FRAMES) {
-        const next = nextXrQualityLevel(xrQuality, frameTimeSum / frameCount);
+        const next = nextXrQualityLevel(xrQuality, frameTimeSum / frameCount, xrFloor);
         resetFrameSampling();
         if (next !== xrQuality) {
           xrQuality = next;
@@ -597,5 +697,8 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
     resetView,
     setSubjectHeight,
     measureDrawCalls,
+    invalidateShadows,
+    watchShadowCasters,
+    shadowStats,
   };
 }
