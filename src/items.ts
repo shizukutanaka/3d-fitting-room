@@ -21,14 +21,39 @@ function mesh(geo: THREE.BufferGeometry, material: THREE.Material, x = 0, y = 0,
   return m;
 }
 
-function fabricMat(color: string, roughness = 0.85): THREE.MeshStandardMaterial {
+// Cloth accessories share the garments' fabric model (avatar.ts
+// FABRIC): a physical material whose sheen lobe gives the fuzzy
+// rim light of cloth at grazing angles. Sheen strength and
+// roughness are per fabric type; the sheen colour is the cloth's
+// own colour lifted toward white, as on the garments.
+export type AccessoryFabric = 'cotton' | 'knit' | 'fur' | 'wool' | 'satin';
+
+export const ACCESSORY_FABRIC: Record<AccessoryFabric, { roughness: number; sheen: number; sheenRoughness: number }> = {
+  cotton: { roughness: 0.8, sheen: 0.35, sheenRoughness: 0.8 },
+  knit: { roughness: 0.95, sheen: 0.7, sheenRoughness: 0.9 },
+  fur: { roughness: 0.95, sheen: 0.9, sheenRoughness: 0.95 },
+  wool: { roughness: 0.95, sheen: 0.65, sheenRoughness: 0.85 },
+  satin: { roughness: 0.35, sheen: 0.6, sheenRoughness: 0.3 },
+};
+
+function sheenTint(color: string): THREE.Color {
+  return new THREE.Color(color).lerp(new THREE.Color('#ffffff'), 0.35);
+}
+
+function fabricMat(color: string, fabric: AccessoryFabric): THREE.MeshPhysicalMaterial {
   const tex = fabricTextures([2, 2]);
-  return new THREE.MeshStandardMaterial({
+  const spec = ACCESSORY_FABRIC[fabric];
+  return new THREE.MeshPhysicalMaterial({
+    name: `fabric-${fabric}`,
     color,
     map: tex.map,
     bumpMap: tex.bump,
     bumpScale: 0.35,
-    roughness,
+    roughness: spec.roughness,
+    metalness: 0,
+    sheen: spec.sheen,
+    sheenRoughness: spec.sheenRoughness,
+    sheenColor: sheenTint(color),
     envMapIntensity: 0.4,
   });
 }
@@ -43,7 +68,7 @@ function buildHat(hat: HatId): THREE.Group | null {
     case 'none':
       return null;
     case 'cap': {
-      const cloth = fabricMat('#a83c46', 0.8);
+      const cloth = fabricMat('#a83c46', 'cotton');
       const dome = mesh(
         new THREE.SphereGeometry(0.0875, 36, 20, 0, Math.PI * 2, 0, Math.PI * 0.52),
         cloth,
@@ -60,7 +85,7 @@ function buildHat(hat: HatId): THREE.Group | null {
       return g;
     }
     case 'beanie': {
-      const knit = fabricMat('#7d9b8a', 0.95);
+      const knit = fabricMat('#7d9b8a', 'knit');
       knit.bumpMap = ribbedBump([16, 1]);
       knit.bumpScale = 0.5;
       const dome = mesh(
@@ -72,7 +97,7 @@ function buildHat(hat: HatId): THREE.Group | null {
       );
       dome.scale.set(0.9, 0.85, 1.1);
       g.add(dome);
-      const bandMat = fabricMat('#6d8a7a', 0.95);
+      const bandMat = fabricMat('#6d8a7a', 'knit');
       bandMat.bumpMap = ribbedBump([22, 1]);
       bandMat.bumpScale = 0.7;
       const band = mesh(
@@ -84,7 +109,7 @@ function buildHat(hat: HatId): THREE.Group | null {
       );
       band.scale.set(0.9, 1, 1.1);
       g.add(band);
-      g.add(mesh(new THREE.SphereGeometry(0.024, 14, 10), fabricMat('#f0ebe2', 0.95), 0, -0.028, -0.002));
+      g.add(mesh(new THREE.SphereGeometry(0.024, 14, 10), fabricMat('#f0ebe2', 'knit'), 0, -0.028, -0.002));
       return g;
     }
     case 'catears': {
@@ -98,7 +123,7 @@ function buildHat(hat: HatId): THREE.Group | null {
       band.scale.set(0.9, 1, 1.08);
       band.rotation.x = 0.08;
       g.add(band);
-      const fur = fabricMat('#5a4232', 0.95);
+      const fur = fabricMat('#5a4232', 'fur');
       const inner = new THREE.MeshStandardMaterial({ color: '#d98a9e', roughness: 0.9 });
       for (const side of [-1, 1]) {
         const ear = mesh(new THREE.ConeGeometry(0.021, 0.048, 16), fur, side * 0.052, -0.028, 0);
@@ -111,9 +136,14 @@ function buildHat(hat: HatId): THREE.Group | null {
       return g;
     }
     case 'ribbon': {
-      const satin = new THREE.MeshStandardMaterial({
+      const satin = new THREE.MeshPhysicalMaterial({
+        name: 'fabric-satin',
         color: '#b03050',
-        roughness: 0.35,
+        roughness: ACCESSORY_FABRIC.satin.roughness,
+        metalness: 0,
+        sheen: ACCESSORY_FABRIC.satin.sheen,
+        sheenRoughness: ACCESSORY_FABRIC.satin.sheenRoughness,
+        sheenColor: sheenTint('#b03050'),
         envMapIntensity: 0.8,
       });
       const grp = new THREE.Group();
@@ -264,7 +294,7 @@ function buildAccessory(
       // A rolled wrap around the neck's own cross-section, with one
       // end lying on the chest over the clothes.
       if (!fit) return null;
-      const cloth = fabricMat('#a63d46', 0.95);
+      const cloth = fabricMat('#a63d46', 'wool');
       cloth.side = THREE.DoubleSide;
       const tube = 0.016;
       const { y, z, rx, rz } = fit.neck;
