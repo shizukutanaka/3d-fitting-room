@@ -67,6 +67,67 @@ export function materialTextures(material: THREE.Material, into: Set<THREE.Textu
   }
 }
 
+/** What decides which depth-pass program a shadow caster needs. */
+export function depthVariantKey(mesh: THREE.Mesh): string {
+  const mat = (Array.isArray(mesh.material) ? mesh.material[0] : mesh.material) as THREE.MeshStandardMaterial;
+  const morphs = mesh.geometry?.morphAttributes ?? {};
+  return [
+    (mesh as THREE.SkinnedMesh).isSkinnedMesh === true ? 's' : '-',
+    Object.keys(morphs).length > 0 ? 'm' : '-',
+    mat.shadowSide ?? mat.side,
+    mat.map ? 'uv' : '-',
+    mat.alphaTest > 0 ? 'a' : '-',
+  ].join('|');
+}
+
+/** Compile every depth-pass (shadow) program variant.
+ *
+ *  three.js draws all shadow casters with one shared depth
+ *  material, copying side and map from each caster's own material
+ *  but re-selecting the program only when the kind of object
+ *  changes (skinned / morphed / static). Which variants a normal
+ *  frame compiles therefore depends on the order casters happen to
+ *  be drawn in — and so on the outfit worn at load. Here each kind
+ *  of caster is drawn on its own, right after a caster of the other
+ *  kind, which forces the selection for exactly its variant. With
+ *  everything else hidden these frames cost next to nothing. */
+export function warmDepthVariants(renderer: WarmupRenderer, scene: THREE.Object3D, camera: THREE.Camera): number {
+  const meshes: THREE.Mesh[] = [];
+  const hidden: THREE.Object3D[] = [];
+  scene.traverseVisible((obj) => {
+    if ((obj as THREE.Mesh).isMesh !== true) return;
+    hidden.push(obj);
+    if (obj.castShadow) meshes.push(obj as THREE.Mesh);
+  });
+  // All casters of a variant are drawn together: any single one
+  // might be outside the light's frustum and never reach the pass.
+  const variants = new Map<string, THREE.Mesh[]>();
+  for (const m of meshes) {
+    const key = depthVariantKey(m);
+    const group = variants.get(key);
+    if (group) group.push(m);
+    else variants.set(key, [m]);
+  }
+  const skinned = meshes.find((m) => (m as THREE.SkinnedMesh).isSkinnedMesh === true);
+  const fixed = meshes.find((m) => (m as THREE.SkinnedMesh).isSkinnedMesh !== true);
+  if (!skinned || !fixed) return 0;
+  for (const o of hidden) o.visible = false;
+  try {
+    for (const group of variants.values()) {
+      const other = (group[0] as THREE.SkinnedMesh).isSkinnedMesh === true ? fixed : skinned;
+      other.visible = true;
+      renderer.render(scene, camera);
+      other.visible = false;
+      for (const m of group) m.visible = true;
+      renderer.render(scene, camera);
+      for (const m of group) m.visible = false;
+    }
+  } finally {
+    for (const o of hidden) o.visible = true;
+  }
+  return variants.size;
+}
+
 export async function warmUpScene(
   renderer: WarmupRenderer,
   scene: THREE.Object3D,
@@ -113,22 +174,7 @@ export async function warmUpScene(
       clearTimeout(timer);
     }
     renderer.render(scene, camera);
-    if (options.extras) {
-      // The shadow pass draws every caster with one shared depth
-      // material whose `map` follows the caster's material, and
-      // three.js picks that program by draw order rather than per
-      // map state. A second frame with only the map-less extras
-      // gets the map-less depth variant compiled as well.
-      let hid = false;
-      options.extras.traverse((obj) => {
-        const mat = (obj as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
-        if (mat && !Array.isArray(mat) && mat.map) {
-          obj.visible = false;
-          hid = true;
-        }
-      });
-      if (hid) renderer.render(scene, camera);
-    }
+    warmDepthVariants(renderer, scene, camera);
   } finally {
     options.reveal.forEach((o, i) => {
       o.visible = wasVisible[i];

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { materialTextures, warmUpScene, type WarmupRenderer } from '../src/warmup';
+import { depthVariantKey, materialTextures, warmDepthVariants, warmUpScene, type WarmupRenderer } from '../src/warmup';
 
 function tex(): THREE.Texture {
   const t = new THREE.Texture();
@@ -64,12 +64,10 @@ describe('shader / texture warm-up', () => {
     const stats = await warmUpScene(f.renderer, s.scene, s.camera, { reveal: [s.hidden, s.worn], extras: s.extras });
     expect(f.visibleAt.compile).toBe(3);
     expect(f.visibleAt.render).toBe(3);
-    expect(f.visibleAt.lastRender).toBe(2);
     expect(new Set(f.inited)).toEqual(new Set([s.shared, s.hiddenBump, s.extraTex]));
     expect(f.inited).toHaveLength(3);
-    // Textures first, then compile, then the warm frame, then a
-    // second frame without the extras that carry a map.
-    expect(f.calls).toEqual(['init', 'init', 'init', 'compile', 'render', 'render']);
+    // Textures first, then compile, then one frame.
+    expect(f.calls).toEqual(['init', 'init', 'init', 'compile', 'render']);
     expect(stats).toMatchObject({ materials: 3, textures: 3, compiled: true });
     expect(s.hidden.visible).toBe(false);
     expect(s.worn.visible).toBe(true);
@@ -114,5 +112,58 @@ describe('shader / texture warm-up', () => {
     const into = new Set<THREE.Texture>();
     materialTextures(m, into);
     expect([...into]).toEqual([ok]);
+  });
+
+  it('draws each kind of shadow caster alone, right after a caster of the other kind', () => {
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera();
+    const mk = (skinned: boolean, opts: THREE.MeshStandardMaterialParameters, name: string) => {
+      const m = skinned
+        ? new THREE.SkinnedMesh(new THREE.BufferGeometry(), new THREE.MeshStandardMaterial(opts))
+        : new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshStandardMaterial(opts));
+      m.name = name;
+      m.castShadow = true;
+      scene.add(m);
+      return m;
+    };
+    const t = new THREE.Texture({} as HTMLImageElement);
+    mk(true, { map: t }, 'body');
+    mk(true, { map: t }, 'body-twin'); // same variant: drawn with it
+    mk(true, { map: t, side: THREE.DoubleSide }, 'skirt');
+    mk(false, {}, 'ears');
+    mk(false, { map: t }, 'bag');
+    const wall = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshStandardMaterial());
+    wall.name = 'wall'; // not a caster
+    scene.add(wall);
+    const frames: string[] = [];
+    const renderer: WarmupRenderer = {
+      initTexture: () => undefined,
+      compileAsync: () => Promise.resolve(),
+      render: () => {
+        const names: string[] = [];
+        scene.traverseVisible((o) => {
+          if (o instanceof THREE.Mesh) names.push(o.name);
+        });
+        frames.push(names.join('+'));
+      },
+    };
+    expect(warmDepthVariants(renderer, scene, camera)).toBe(4);
+    expect(frames).toEqual(['ears', 'body+body-twin', 'ears', 'skirt', 'body', 'ears', 'body', 'bag']);
+    // Everything is visible again afterwards.
+    scene.traverse((o) => expect(o.visible).toBe(true));
+    expect(depthVariantKey(scene.getObjectByName('body') as THREE.Mesh)).toBe(
+      depthVariantKey(scene.getObjectByName('body-twin') as THREE.Mesh),
+    );
+  });
+
+  it('skips the depth pass warm-up when only one kind of caster exists', () => {
+    const scene = new THREE.Scene();
+    const m = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshStandardMaterial());
+    m.castShadow = true;
+    scene.add(m);
+    let renders = 0;
+    const renderer: WarmupRenderer = { initTexture: () => undefined, compileAsync: () => Promise.resolve(), render: () => void (renders += 1) };
+    expect(warmDepthVariants(renderer, scene, new THREE.PerspectiveCamera())).toBe(0);
+    expect(renders).toBe(0);
   });
 });
