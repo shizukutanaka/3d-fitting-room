@@ -103,6 +103,7 @@ export type VrAction =
   | { type: 'color'; field: 'topColor' | 'outerColor' | 'bottomColor' | 'shoeColor'; value: string }
   | { type: 'look'; id: string }
   | { type: 'photo' }
+  | { type: 'diag' }
   | { type: 'turn'; dir: 1 | -1 }
   | { type: 'page'; page: 0 | 1 };
 
@@ -119,6 +120,8 @@ export function vrActionId(action: VrAction): string {
       return `look:${action.id}`;
     case 'photo':
       return 'photo';
+    case 'diag':
+      return 'diag';
     case 'turn':
       return `turn:${action.dir}`;
     case 'page':
@@ -137,6 +140,7 @@ const COLOR_FIELD_NAMES: ReadonlySet<string> = new Set(['topColor', 'outerColor'
  *  degrades to a no-op rather than a bad state. */
 export function parseVrActionId(id: string): VrAction | null {
   if (id === 'photo') return { type: 'photo' };
+  if (id === 'diag') return { type: 'diag' };
   if (id.startsWith('look:')) {
     const lookId = id.slice('look:'.length);
     return lookId ? { type: 'look', id: lookId } : null;
@@ -290,6 +294,8 @@ export interface VrPanelState {
   outfit: Outfit;
   looks: VrLookEntry[];
   page: 0 | 1;
+  /** Whether the diagnostics board is showing (its chip reads selected). */
+  diagOn?: boolean;
 }
 
 const PANEL_INNER_WIDTH = VR_PANEL_WIDTH - 0.12;
@@ -665,7 +671,12 @@ export class VrPanel {
       // discoverable, testable path).
       cursorY -= 0.01 + CHIP_HEIGHT / 2;
       chipRow(
-        [{ label: t('ui.savePhoto'), selected: false, actionId: vrActionId({ type: 'photo' }) }],
+        [
+          { label: t('ui.savePhoto'), selected: false, actionId: vrActionId({ type: 'photo' }) },
+          // Performance diagnostics board (diagnostics.ts): off by
+          // default, shown on demand for real-device measurement.
+          { label: t('vr.diag'), selected: state.diagOn === true, actionId: vrActionId({ type: 'diag' }) },
+        ],
         cursorY,
       );
       cursorY -= CHIP_HEIGHT / 2 + ROW_GAP + CHIP_HEIGHT / 2;
@@ -722,6 +733,9 @@ export interface VrHost {
   getLooks(): VrLookEntry[];
   applyLook(id: string): void;
   takePhoto(): void;
+  /** Show/hide the diagnostics overlay (optional host feature). */
+  toggleDiagnostics?(): void;
+  diagnosticsOn?(): boolean;
 }
 
 export interface VrRig {
@@ -734,6 +748,9 @@ export interface VrRig {
   /** Per-frame work while presenting: hover raycast and
    *  thumbstick snap turn. A no-op on the flat screen. */
   update(): void;
+  /** Draw these lines on the diagnostics board above the panel;
+   *  null hides the board (no draw call, no texture upload). */
+  setDiagLines(lines: string[] | null): void;
   /** The action most recently dispatched (for verification). */
   readonly lastAction: VrAction | null;
 }
@@ -763,7 +780,7 @@ export function createVrRig(stage: StageLike, host: VrHost): VrRig {
   const rotMatrix = new THREE.Matrix4();
 
   function refreshPanel(): void {
-    panel.refresh({ outfit: host.getOutfit(), looks: host.getLooks(), page });
+    panel.refresh({ outfit: host.getOutfit(), looks: host.getLooks(), page, diagOn: host.diagnosticsOn?.() === true });
   }
 
   function dispatch(action: VrAction): void {
@@ -780,6 +797,9 @@ export function createVrRig(stage: StageLike, host: VrHost): VrRig {
         break;
       case 'photo':
         host.takePhoto();
+        break;
+      case 'diag':
+        host.toggleDiagnostics?.();
         break;
       case 'turn': {
         const player = stage.player;
@@ -908,6 +928,43 @@ export function createVrRig(stage: StageLike, host: VrHost): VrRig {
     pollThumbsticks(performance.now());
   }
 
+  // The diagnostics board: a small text plane above the panel,
+  // created on first use and redrawn only when new lines arrive
+  // (once per log window), so it costs nothing while hidden.
+  let diagBoard: { mesh: THREE.Mesh; ctx: CanvasRenderingContext2D; tex: THREE.CanvasTexture } | null = null;
+  function setDiagLines(lines: string[] | null): void {
+    if (!lines) {
+      if (diagBoard) diagBoard.mesh.visible = false;
+      return;
+    }
+    if (!diagBoard) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 1024;
+      canvas.height = 384;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      const mesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(VR_PANEL_WIDTH, VR_PANEL_WIDTH * (384 / 1024)),
+        new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }),
+      );
+      mesh.name = 'vr-diag-board';
+      mesh.position.set(0, VR_PANEL_HEIGHT / 2 + (VR_PANEL_WIDTH * (384 / 1024)) / 2 + 0.03, 0);
+      panel.group.add(mesh);
+      diagBoard = { mesh, ctx, tex };
+    }
+    const { ctx, tex, mesh } = diagBoard;
+    ctx.fillStyle = '#16130f';
+    ctx.fillRect(0, 0, 1024, 384);
+    ctx.fillStyle = '#e8e0d0';
+    ctx.font = '36px ui-monospace, Menlo, Consolas, monospace';
+    ctx.textBaseline = 'middle';
+    lines.forEach((line, i) => ctx.fillText(line, 28, 48 + i * 64, 968));
+    tex.needsUpdate = true;
+    mesh.visible = true;
+  }
+
   refreshPanel();
 
   return {
@@ -915,6 +972,7 @@ export function createVrRig(stage: StageLike, host: VrHost): VrRig {
     press,
     refreshPanel,
     update,
+    setDiagLines,
     get lastAction() {
       return lastAction;
     },
