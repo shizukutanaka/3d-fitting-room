@@ -81,6 +81,45 @@ body {
   cursor: pointer;
 }
 
+/* Loading screen: covers the stage until the mannequin is loaded
+   and the wardrobe's shaders and textures are warm (warmup.ts). */
+#loading {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: #efe9df;
+  color: #6b6258;
+  font-size: 14px;
+  transition: opacity 0.25s ease;
+}
+#loading.done {
+  opacity: 0;
+  pointer-events: none;
+}
+#loading .spinner {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 3px solid rgba(107, 98, 88, 0.25);
+  border-top-color: #a06a2c;
+  animation: loading-spin 0.9s linear infinite;
+}
+@keyframes loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  #loading .spinner {
+    animation: none;
+  }
+}
+
 #toast {
   position: fixed;
   top: 84px;
