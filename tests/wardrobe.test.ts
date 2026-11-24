@@ -281,6 +281,52 @@ describe('wardrobe on the skinned mannequin (GLB garments, bone calibration)', {
     }
   });
 
+  it('every cloth surface is a physical material with a fabric sheen in the cloth\'s own tint', async () => {
+    const check = (m: THREE.Material, label: string) => {
+      expect(m, label).toBeInstanceOf(THREE.MeshPhysicalMaterial);
+      const mat = m as THREE.MeshPhysicalMaterial;
+      expect(mat.sheen, label).toBeGreaterThan(0);
+      expect(mat.sheenRoughness, label).toBeGreaterThan(0);
+      // Sheen colour = base colour lifted 35% toward white.
+      const want = mat.color.clone().lerp(new THREE.Color('#ffffff'), 0.35);
+      expect(Math.abs(mat.sheenColor.r - want.r), label).toBeLessThan(1e-6);
+      expect(Math.abs(mat.sheenColor.g - want.g), label).toBeLessThan(1e-6);
+      expect(Math.abs(mat.sheenColor.b - want.b), label).toBeLessThan(1e-6);
+    };
+    // Skinned garments.
+    const { rig } = await dressed({ ...DEFAULT_OUTFIT, topStyle: 'hoodie', topColor: '#3a5fa8', outerStyle: 'coat', bottomStyle: 'skirt' });
+    let garments = 0;
+    rig.root.traverse((obj) => {
+      if (!(obj instanceof THREE.SkinnedMesh) || !obj.name.startsWith('G_') || !obj.visible) return;
+      const mat = obj.material as THREE.MeshPhysicalMaterial;
+      expect(mat).toBeInstanceOf(THREE.MeshPhysicalMaterial);
+      expect(mat.sheen + mat.clearcoat, obj.name).toBeGreaterThan(0);
+      // The base layer keeps a fixed sheen tint; leather shoes use clearcoat.
+      if (obj.name === 'G_base' || mat.clearcoat > 0) return;
+      check(mat, obj.name);
+      garments += 1;
+    });
+    expect(garments).toBeGreaterThanOrEqual(3);
+    // Procedural cloth accessories.
+    const fabricKinds = new Set<string>();
+    const collect = (root: THREE.Object3D) =>
+      root.traverse((obj) => {
+        if (!(obj instanceof THREE.Mesh)) return;
+        const mat = obj.material as THREE.Material;
+        if (!mat.name.startsWith('fabric-')) return;
+        check(mat, mat.name);
+        fabricKinds.add(mat.name);
+      });
+    for (const hat of ['cap', 'beanie', 'catears', 'ribbon'] as const) {
+      const r = await dressed({ ...DEFAULT_OUTFIT, hat });
+      expect(r.rig.hatAnchor.children.length).toBe(1);
+      collect(r.rig.hatAnchor);
+    }
+    const scarf = await dressed({ ...DEFAULT_OUTFIT, accessory: 'scarf' });
+    collect(scarf.rig.neckAnchor);
+    expect([...fabricKinds].sort()).toEqual(['fabric-cotton', 'fabric-fur', 'fabric-knit', 'fabric-satin', 'fabric-wool']);
+  });
+
   it('sanitizeOutfit keeps the new catalog values and rejects off-list ones', () => {
     const o = sanitizeOutfit({
       topStyle: 'dressLong',

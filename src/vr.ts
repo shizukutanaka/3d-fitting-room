@@ -235,16 +235,31 @@ export interface XrQualityStep {
   foveation: number;
   /** Whether the key light casts shadows. */
   shadows: boolean;
+  /** Shadow map edge (px) and filter: soft = PCFSoft, else PCF. */
+  shadowPx: number;
+  shadowSoft: boolean;
 }
 
 export const XR_QUALITY_STEPS: readonly XrQualityStep[] = [
   // Step 0 is the session-start state; its mirror size is
   // scene.ts's MIRROR_XR_PX (the two must agree).
-  { mirrorPx: 512, foveation: 0.5, shadows: true },
-  { mirrorPx: 256, foveation: 0.5, shadows: true },
-  { mirrorPx: null, foveation: 0.65, shadows: true },
-  { mirrorPx: null, foveation: 0.85, shadows: false },
+  { mirrorPx: 512, foveation: 0.5, shadows: true, shadowPx: 2048, shadowSoft: true },
+  // The standalone-headset step (Quest): a quarter of the shadow
+  // texels and the cheaper PCF filter, everything else intact.
+  // Standalone headsets start here (xrStartLevel) and never climb
+  // above it.
+  { mirrorPx: 512, foveation: 0.5, shadows: true, shadowPx: 1024, shadowSoft: false },
+  { mirrorPx: 256, foveation: 0.5, shadows: true, shadowPx: 1024, shadowSoft: false },
+  { mirrorPx: null, foveation: 0.65, shadows: true, shadowPx: 1024, shadowSoft: false },
+  { mirrorPx: null, foveation: 0.85, shadows: false, shadowPx: 1024, shadowSoft: false },
 ];
+
+/** The ladder level a session starts at, which is also the best
+ *  level it may recover to. Standalone (mobile-GPU) headsets start
+ *  on the 1024 px / PCF step; a PC-driven headset starts at 0. */
+export function xrStartLevel(userAgent: string): number {
+  return /OculusBrowser|Quest|Pico|Mobile VR/i.test(userAgent) ? 1 : 0;
+}
 
 /** The frame budget the ladder defends: 72 Hz, the Quest 2
  *  baseline frame rate (WORLD-CLASS.md M1). */
@@ -253,13 +268,13 @@ export const XR_FRAME_BUDGET_MS = 1000 / 72;
 export const XR_RECOVER_MS = XR_FRAME_BUDGET_MS * 0.62;
 
 /** One ladder decision from a windowed average frame time. */
-export function nextXrQualityLevel(current: number, avgFrameMs: number): number {
-  const clamped = Math.min(Math.max(current, 0), XR_QUALITY_STEPS.length - 1);
+export function nextXrQualityLevel(current: number, avgFrameMs: number, floor = 0): number {
+  const clamped = Math.min(Math.max(current, floor), XR_QUALITY_STEPS.length - 1);
   if (avgFrameMs > XR_FRAME_BUDGET_MS) {
     return Math.min(clamped + 1, XR_QUALITY_STEPS.length - 1);
   }
   if (avgFrameMs < XR_RECOVER_MS) {
-    return Math.max(clamped - 1, 0);
+    return Math.max(clamped - 1, floor);
   }
   return clamped;
 }
