@@ -38,6 +38,15 @@ import {
   type GlbSkinDef,
 } from './glb';
 import { encodeSeed } from './seed';
+import {
+  buildSpringBoneSpec,
+  buildVrmcSpringBoneExtension,
+  isFlowingHemGarment,
+  reweightHemVertices,
+  type FlowingHemBounds,
+  type SpringChainSpec,
+  type Vec3Tuple,
+} from './springbone';
 /** The license the exported files are released under. The terms
  *  mandated for the export — free use as material in anyone's
  *  works — are exactly CC0's terms, so the deed URL of CC0 1.0 is
@@ -107,9 +116,15 @@ interface Snapshot {
   materials: GlbMaterialDef[];
   skin: GlbSkinDef;
   rig: AvatarRig;
+  springExtension?: Record<string, unknown>;
 }
 
-async function snapshotOutfit(outfit: Outfit, figure: FigureId, leg: LegRatio): Promise<Snapshot> {
+async function snapshotOutfit(
+  outfit: Outfit,
+  figure: FigureId,
+  leg: LegRatio,
+  includeSpringBones: boolean,
+): Promise<Snapshot> {
   const rig = buildAvatar(outfit.character, figure, leg, false);
   applyOutfit(rig, outfit);
   await rig.ready;
@@ -147,6 +162,71 @@ async function snapshotOutfit(outfit: Outfit, figure: FigureId, leg: LegRatio): 
     const local = world[i].clone().sub(parent >= 0 ? world[parent] : new THREE.Vector3());
     return { name: n, parent, translation: [local.x, local.y, local.z] };
   });
+
+  const jointIndex = new Map<string, number>(JOINT_INDEX);
+  let springExtension: Record<string, unknown> | undefined;
+  let hemChains: SpringChainSpec[] = [];
+  const hipsWorld = world[0];
+
+  if (includeSpringBones) {
+    const bonesMap: Record<string, Vec3Tuple> = {};
+    JOINT_NAMES.forEach((n, i) => {
+      bonesMap[n] = [world[i].x, world[i].y, world[i].z];
+    });
+
+    // Measure the lowest/widest visible flowing garment below hips for hem chains.
+    let flowingHem: FlowingHemBounds | null = null;
+    const tmpV = new THREE.Vector3();
+    root.traverse((obj) => {
+      if (!(obj instanceof THREE.SkinnedMesh) || !shown(obj, root) || !isFlowingHemGarment(obj.name)) return;
+      const pos = obj.geometry.getAttribute('position');
+      if (!pos || pos.count === 0) return;
+      let minY = Infinity;
+      let maxRx = 0;
+      let maxRz = 0;
+      for (let i = 0; i < pos.count; i++) {
+        obj.getVertexPosition(i, tmpV).applyMatrix4(obj.matrixWorld);
+        if (tmpV.y < minY) minY = tmpV.y;
+        if (tmpV.y <= hipsWorld.y + 0.02) {
+          maxRx = Math.max(maxRx, Math.abs(tmpV.x - hipsWorld.x));
+          maxRz = Math.max(maxRz, Math.abs(tmpV.z - hipsWorld.z));
+        }
+      }
+      if (minY < hipsWorld.y - 0.06) {
+        if (!flowingHem) {
+          flowingHem = { topY: hipsWorld.y, bottomY: minY, radiusX: maxRx, radiusZ: maxRz };
+        } else {
+          flowingHem.bottomY = Math.min(flowingHem.bottomY, minY);
+          flowingHem.radiusX = Math.max(flowingHem.radiusX, maxRx);
+          flowingHem.radiusZ = Math.max(flowingHem.radiusZ, maxRz);
+        }
+      }
+    });
+
+    const springSpec = buildSpringBoneSpec({
+      flowingHem,
+      bones: bonesMap,
+      height: outfit.character.height,
+    });
+    for (const chain of springSpec.chains) {
+      let parentIdx = jointIndex.get(chain.parentBone);
+      if (parentIdx === undefined) continue;
+      for (const j of chain.joints) {
+        const idx = joints.length;
+        const local: Vec3Tuple = [...j.localOffset];
+        const w = world[parentIdx].clone().add(new THREE.Vector3(local[0], local[1], local[2]));
+        joints.push({ name: j.name, parent: parentIdx, translation: local });
+        world.push(w);
+        jointIndex.set(j.name, idx);
+        parentIdx = idx;
+      }
+    }
+    hemChains = springSpec.chains.filter((c) => c.category === 'hem');
+    if (springSpec.chains.length > 0) {
+      springExtension = buildVrmcSpringBoneExtension(springSpec, jointIndex);
+    }
+  }
+
   // Translation-only bones: each inverse bind matrix is the
   // negated world translation (column-major).
   const inverseBindMatrices = new Float32Array(joints.length * 16);
@@ -229,6 +309,9 @@ async function snapshotOutfit(outfit: Outfit, figure: FigureId, leg: LegRatio): 
         if (sum > 0) for (let k = 0; k < 4; k++) skinWeights[i * 4 + k] /= sum;
         else skinWeights[i * 4] = 1;
       }
+      if (includeSpringBones && hemChains.length > 0 && isFlowingHemGarment(name)) {
+        reweightHemVertices(out, skinJoints, skinWeights, hemChains, jointIndex, hipsWorld.x, hipsWorld.z);
+      }
       parts.push({
         name,
         positions: out,
@@ -256,7 +339,7 @@ async function snapshotOutfit(outfit: Outfit, figure: FigureId, leg: LegRatio): 
       geo.dispose();
     }
   });
-  return { parts, materials, skin: { joints, inverseBindMatrices }, rig };
+  return { parts, materials, skin: { joints, inverseBindMatrices }, rig, springExtension };
 }
 
 /** Release the throwaway rig. Skinned meshes share geometry and
@@ -296,9 +379,9 @@ function fittingRoomExtras(outfit: Outfit, seed: string): Record<string, unknown
 const GENERATOR = '3D Fitting Room (working title) — on-device glTF/VRM exporter';
 
 async function buildExport(outfit: Outfit, vrm: boolean, figure: FigureId, leg: LegRatio): Promise<ExportedFile> {
-  const snap = await snapshotOutfit(outfit, figure, leg);
+  const snap = await snapshotOutfit(outfit, figure, leg, vrm);
   try {
-    const { parts, materials, skin } = snap;
+    const { parts, materials, skin, springExtension } = snap;
     const seed = encodeSeed(outfit);
     const extras = fittingRoomExtras(outfit, seed);
     if (!vrm) {
@@ -309,38 +392,44 @@ async function buildExport(outfit: Outfit, vrm: boolean, figure: FigureId, leg: 
     JOINT_NAMES.forEach((name, idx) => {
       humanBones[name] = { node: idx };
     });
+    const extensionsUsed = ['VRMC_vrm'];
+    const extensions: Record<string, unknown> = {
+      VRMC_vrm: {
+        specVersion: '1.0',
+        meta: {
+          name: 'Fitting Room Character',
+          version: '1.0',
+          authors: ['3D Fitting Room (working title)'],
+          copyrightInformation:
+            'A fictional adult character, built on-device by the 3D Fitting Room app from its CC0 mannequins. Free to use as material in your own works under CC0 1.0 (see licenseUrl).',
+          licenseUrl: EXPORT_LICENSE_URL,
+          // Some tools (e.g. the Blender VRM addon) surface otherLicenseUrl
+          // rather than licenseUrl; mirror the same CC0 deed so the terms
+          // travel in whichever field the reader displays (§23).
+          otherLicenseUrl: EXPORT_LICENSE_URL,
+          avatarPermission: 'everyone',
+          commercialUsage: 'corporation',
+          creditNotation: 'unnecessary',
+          allowRedistribution: true,
+          modification: 'allowModificationRedistribution',
+          allowExcessivelyViolentUsage: false,
+          allowExcessivelySexualUsage: false,
+          allowPoliticalOrReligiousUsage: false,
+          allowAntisocialOrHateUsage: false,
+        },
+        humanoid: { humanBones },
+      },
+    };
+    if (springExtension) {
+      extensionsUsed.push('VRMC_springBone');
+      extensions.VRMC_springBone = springExtension;
+    }
     const bytes = buildGlb(parts, materials, {
       generator: GENERATOR,
       extras,
       skin,
-      extensionsUsed: ['VRMC_vrm'],
-      extensions: {
-        VRMC_vrm: {
-          specVersion: '1.0',
-          meta: {
-            name: 'Fitting Room Character',
-            version: '1.0',
-            authors: ['3D Fitting Room (working title)'],
-            copyrightInformation:
-              'A fictional adult character, built on-device by the 3D Fitting Room app from its CC0 mannequins. Free to use as material in your own works under CC0 1.0 (see licenseUrl).',
-            licenseUrl: EXPORT_LICENSE_URL,
-            // Some tools (e.g. the Blender VRM addon) surface otherLicenseUrl
-            // rather than licenseUrl; mirror the same CC0 deed so the terms
-            // travel in whichever field the reader displays (§23).
-            otherLicenseUrl: EXPORT_LICENSE_URL,
-            avatarPermission: 'everyone',
-            commercialUsage: 'corporation',
-            creditNotation: 'unnecessary',
-            allowRedistribution: true,
-            modification: 'allowModificationRedistribution',
-            allowExcessivelyViolentUsage: false,
-            allowExcessivelySexualUsage: false,
-            allowPoliticalOrReligiousUsage: false,
-            allowAntisocialOrHateUsage: false,
-          },
-          humanoid: { humanBones },
-        },
-      },
+      extensionsUsed,
+      extensions,
     });
     return { bytes, parts: parts.length, seed };
   } finally {
