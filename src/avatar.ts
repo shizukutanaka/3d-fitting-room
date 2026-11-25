@@ -1000,15 +1000,28 @@ interface LoadedFigure {
   fitFields: Map<string, GarmentFitField>;
 }
 
+/** Shallow-clone a BufferGeometry shell sharing all attributes/index/morphs
+ *  with the source so callers can replace individual attributes per rig. */
+function cloneGeometryShell(src: THREE.BufferGeometry): THREE.BufferGeometry {
+  const geo = new THREE.BufferGeometry();
+  for (const [name, attr] of Object.entries(src.attributes)) geo.setAttribute(name, attr);
+  if (src.index) geo.setIndex(src.index);
+  if (src.morphAttributes && Object.keys(src.morphAttributes).length > 0) {
+    geo.morphAttributes = src.morphAttributes;
+    geo.morphTargetsRelative = src.morphTargetsRelative;
+  }
+  geo.boundingBox = src.boundingBox;
+  geo.boundingSphere = src.boundingSphere;
+  return geo;
+}
+
 /** Give a mesh its own index over the shared vertex data, so one
  *  rig can leave triangles out without touching another rig. */
 function ownIndex(m: THREE.SkinnedMesh): ArrayLike<number> | null {
   const src = m.geometry;
   if (!src.index) return null;
-  const geo = new THREE.BufferGeometry();
-  for (const [name, attr] of Object.entries(src.attributes)) geo.setAttribute(name, attr);
+  const geo = cloneGeometryShell(src);
   geo.setIndex(src.index.clone());
-  geo.boundingSphere = src.boundingSphere;
   m.geometry = geo;
   return src.index.array;
 }
@@ -1019,16 +1032,8 @@ function ownPosition(m: THREE.SkinnedMesh): void {
   const src = m.geometry;
   const pos = src.getAttribute('position');
   if (!pos) return;
-  const geo = new THREE.BufferGeometry();
-  for (const [name, attr] of Object.entries(src.attributes)) {
-    geo.setAttribute(name, name === 'position' ? new THREE.BufferAttribute(new Float32Array(pos.array), 3) : attr);
-  }
-  if (src.index) geo.setIndex(src.index);
-  if (src.morphAttributes && Object.keys(src.morphAttributes).length > 0) {
-    geo.morphAttributes = src.morphAttributes;
-    geo.morphTargetsRelative = src.morphTargetsRelative;
-  }
-  geo.boundingSphere = src.boundingSphere;
+  const geo = cloneGeometryShell(src);
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos.array), 3));
   m.geometry = geo;
   if (Object.keys(geo.morphAttributes).length > 0) m.updateMorphTargets();
 }
