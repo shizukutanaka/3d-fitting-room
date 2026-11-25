@@ -2438,6 +2438,7 @@ interface FittingRoomBridge {
     support: string;
     presenting: boolean;
     qualityLevel: number;
+    viewportScale: number;
     panelButtons: number;
     panelActionIds: string[];
     playerPosition: [number, number, number];
@@ -2596,6 +2597,7 @@ const bridge: FittingRoomBridge = {
     support: vrSupport,
     presenting: stage.isPresenting(),
     qualityLevel: stage.xrQualityLevel(),
+    viewportScale: stage.xrViewportScale(),
     panelButtons: vrRig ? vrRig.panel.targets.length : 0,
     panelActionIds: vrRig
       ? vrRig.panel.targets.map((o) => String(o.userData.actionId ?? ''))
