@@ -1,9 +1,8 @@
 // Procedural textures, all generated on a 2D canvas at runtime —
 // no image files, no downloads, so the license ledger stays clean
 // (see docs/DESIGN.md). These carry the "real-ish" material quality:
-// fabric weave, skin mottling, hair strands, wood grain, plaster,
-// pebbled leather. Color maps are kept near-neutral so the material
-// color can tint them.
+// fabric weave, wood grain, plaster, pebbled leather. Color maps are
+// kept near-neutral so the material color can tint them.
 
 import * as THREE from 'three';
 
@@ -91,56 +90,6 @@ export function fabricTextures(repeat: [number, number] = [3, 3]): MapBump {
   return {
     map: canvasTexture(256, drawMap, { srgb: true, repeat }),
     bump: canvasTexture(256, drawBump, { repeat }),
-  };
-}
-
-/** Skin: extremely subtle warm mottling over white (tinted by the
- *  material color) plus a micro-noise bump. Kept faint on purpose —
- *  strong skin detail at this scale reads as dirt, not realism. */
-export function skinTextures(): MapBump {
-  const drawMap = (ctx: CanvasRenderingContext2D, size: number) => {
-    ctx.fillStyle = '#fdf6f0';
-    ctx.fillRect(0, 0, size, size);
-    const rand = rng(23);
-    speckle(ctx, size, 260, rand, (a) => `rgba(214,150,110,${a * 0.7})`, 4, 16);
-    speckle(ctx, size, 200, rand, (a) => `rgba(240,200,170,${a})`, 3, 10);
-    speckle(ctx, size, 900, rand, (a) => `rgba(190,130,95,${a * 0.5})`, 0.5, 1.2);
-  };
-  const drawBump = (ctx: CanvasRenderingContext2D, size: number) => {
-    ctx.fillStyle = '#808080';
-    ctx.fillRect(0, 0, size, size);
-    const rand = rng(29);
-    speckle(ctx, size, 2600, rand, (a) => `rgba(255,255,255,${a})`, 0.4, 1.1);
-    speckle(ctx, size, 2600, rand, (a) => `rgba(0,0,0,${a})`, 0.4, 1.1);
-  };
-  return {
-    map: canvasTexture(256, drawMap, { srgb: true }),
-    bump: canvasTexture(256, drawBump),
-  };
-}
-
-/** Hair strands: vertical streaks used as bump (and faint map). */
-export function hairTextures(): MapBump {
-  const draw = (base: string, amp: number) => (ctx: CanvasRenderingContext2D, size: number) => {
-    ctx.fillStyle = base;
-    ctx.fillRect(0, 0, size, size);
-    const rand = rng(37);
-    for (let x = 0; x < size; x += 1) {
-      const v = (rand() - 0.5) * amp;
-      ctx.fillStyle = v > 0 ? `rgba(255,235,210,${v})` : `rgba(10,5,0,${-v})`;
-      const w = 1 + rand() * 2;
-      ctx.fillRect(x, 0, w, size);
-      x += w - 1;
-    }
-    // a few longer darker strands for depth
-    for (let i = 0; i < 40; i++) {
-      ctx.fillStyle = `rgba(15,8,4,${0.10 + rand() * 0.12})`;
-      ctx.fillRect(rand() * size, 0, 1, size);
-    }
-  };
-  return {
-    map: canvasTexture(256, draw('#f7f2ec', 0.16), { srgb: true, repeat: [2, 1] }),
-    bump: canvasTexture(256, draw('#808080', 0.85), { repeat: [2, 1] }),
   };
 }
 
