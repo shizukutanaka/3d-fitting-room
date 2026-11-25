@@ -279,14 +279,34 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
+let persistTimer: number | null = null;
+
 /** Persist the current person: the legacy single-save key
  *  (outfit.ts — its autosave behavior is unchanged) and the
  *  roster's current entry, which is the same person as a seed. */
 function persist(): void {
+  if (persistTimer !== null) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
   saveOutfit(outfit);
   roster = upsertCurrent(roster, encodeSeed(outfit));
   saveRoster(roster);
 }
+
+/** Debounced persist for continuous slider drags so dragging does not
+ *  trigger two synchronous localStorage writes on every input event.
+ *  Committed changes call persist() directly; pagehide flushes pending writes. */
+function schedulePersist(): void {
+  if (persistTimer !== null) clearTimeout(persistTimer);
+  persistTimer = window.setTimeout(() => {
+    persistTimer = null;
+    persist();
+  }, 250);
+}
+window.addEventListener('pagehide', () => {
+  if (persistTimer !== null) persist();
+});
 
 // ---- lineage: the on-device edit history (lineage.ts) ----
 // Recorded at the identity-level event points only — a person
@@ -470,7 +490,7 @@ function patchCharacter(patch: Partial<CharacterParams>): void {
     character: sanitizeCharacter({ ...outfit.character, ...patch }),
   };
   showCharacter(outfit.character);
-  persist();
+  schedulePersist();
   const seedEl = document.getElementById('seed-value');
   if (seedEl) seedEl.textContent = encodeSeed(outfit);
 }
