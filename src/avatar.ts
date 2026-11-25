@@ -1056,6 +1056,9 @@ interface LoadedFigure {
   /** The body and base-layer meshes whose covered triangles are
    *  left out, with their full triangle lists. */
   masked: { mesh: THREE.SkinnedMesh; full: ArrayLike<number>; cover: Map<string, Uint8Array> }[];
+  /** Per-figure owned BufferGeometry shells (masked, fit-offset, spring-reweighted)
+   *  to dispose when this figure is replaced. */
+  ownedGeometries: Set<THREE.BufferGeometry>;
   /** Body-linked fit-offset fields per clothing garment (backlog #12). */
   fitFields: Map<string, GarmentFitField>;
   /** Live Verlet spring-bone solver sharing the VRMC_springBone spec. */
@@ -1077,9 +1080,12 @@ function cloneGeometryShell(src: THREE.BufferGeometry): THREE.BufferGeometry {
   return geo;
 }
 
-function ownSkinning(m: THREE.SkinnedMesh): { skinJoints: Uint8Array; skinWeights: Float32Array } {
+function ownSkinning(
+  m: THREE.SkinnedMesh,
+  owned?: Set<THREE.BufferGeometry>,
+): { skinJoints: Uint8Array; skinWeights: Float32Array } {
   const src = m.geometry;
-  const geo = cloneGeometryShell(src);
+  const geo = owned?.has(src) ? src : cloneGeometryShell(src);
   const si = src.getAttribute('skinIndex');
   const sw = src.getAttribute('skinWeight');
   const count = src.getAttribute('position').count;
@@ -1094,6 +1100,7 @@ function ownSkinning(m: THREE.SkinnedMesh): { skinJoints: Uint8Array; skinWeight
   geo.setAttribute('skinIndex', new THREE.BufferAttribute(skinJoints, 4));
   geo.setAttribute('skinWeight', new THREE.BufferAttribute(skinWeights, 4));
   m.geometry = geo;
+  owned?.add(geo);
   return { skinJoints, skinWeights };
 }
 
@@ -1102,6 +1109,7 @@ function attachSprings(
   bones: Map<string, THREE.Bone>,
   garments: Map<string, THREE.SkinnedMesh>,
   height: number,
+  owned?: Set<THREE.BufferGeometry>,
 ): SpringBoneRuntime | undefined {
   group.updateMatrixWorld(true);
   const bonesMap: Record<string, Vec3Tuple> = {};
@@ -1178,7 +1186,7 @@ function attachSprings(
         worldPos[i * 3 + 2] = tmp.z;
       }
 
-      const { skinJoints, skinWeights } = ownSkinning(mesh);
+      const { skinJoints, skinWeights } = ownSkinning(mesh, owned);
       reweightHemVertices(worldPos, skinJoints, skinWeights, hemChains, idxMap, hips[0], hips[2]);
       mesh.geometry.getAttribute('skinIndex').needsUpdate = true;
       mesh.geometry.getAttribute('skinWeight').needsUpdate = true;
@@ -1191,24 +1199,26 @@ function attachSprings(
 
 /** Give a mesh its own index over the shared vertex data, so one
  *  rig can leave triangles out without touching another rig. */
-function ownIndex(m: THREE.SkinnedMesh): ArrayLike<number> | null {
+function ownIndex(m: THREE.SkinnedMesh, owned?: Set<THREE.BufferGeometry>): ArrayLike<number> | null {
   const src = m.geometry;
   if (!src.index) return null;
-  const geo = cloneGeometryShell(src);
+  const geo = owned?.has(src) ? src : cloneGeometryShell(src);
   geo.setIndex(src.index.clone());
   m.geometry = geo;
+  owned?.add(geo);
   return src.index.array;
 }
 
 /** Give a garment mesh its own position attribute over the shared
  *  vertex data so body-linked fit offsets never mutate assetCache. */
-function ownPosition(m: THREE.SkinnedMesh): void {
+function ownPosition(m: THREE.SkinnedMesh, owned?: Set<THREE.BufferGeometry>): void {
   const src = m.geometry;
   const pos = src.getAttribute('position');
   if (!pos) return;
-  const geo = cloneGeometryShell(src);
+  const geo = owned?.has(src) ? src : cloneGeometryShell(src);
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos.array), 3));
   m.geometry = geo;
+  owned?.add(geo);
   if (Object.keys(geo.morphAttributes).length > 0) m.updateMorphTargets();
 }
 
@@ -1331,11 +1341,11 @@ export function buildAvatar(
       // Re-home anchors before the old figure is dropped.
       for (const a of [head, neckAnchor, bagAnchor, torsoAnchor, bottomAnchor, shoesAnchor]) root.add(a);
       root.remove(current.group);
-      // Dispose per-figure materials and owned masked geometries
+      // Dispose per-figure materials and all owned geometries
       // (shared asset geometries and cached textures remain intact).
       current.body.dispose();
       for (const mat of current.materials.values()) mat.dispose();
-      for (const { mesh } of current.masked) mesh.geometry.dispose();
+      for (const geo of current.ownedGeometries) geo.dispose();
     }
     current = loaded;
     root.add(loaded.group);
@@ -1370,8 +1380,9 @@ export function buildAvatar(
     const box = new THREE.Box3();
     let eyeBox: THREE.Box3 | null = null;
     const masked: LoadedFigure['masked'] = [];
+    const ownedGeometries = new Set<THREE.BufferGeometry>();
     const mask = (m: THREE.SkinnedMesh, kind: 'body' | 'base') => {
-      const full = maskBody ? ownIndex(m) : null;
+      const full = maskBody ? ownIndex(m, ownedGeometries) : null;
       if (full) masked.push({ mesh: m, full, cover: asset.cover[kind] });
     };
     group.traverse((o) => {
@@ -1390,7 +1401,7 @@ export function buildAvatar(
         garments.set(id, m);
         m.visible = id === 'base';
         if (id === 'base') mask(m, 'base');
-        else if (asset.fitOffsets.has(id)) ownPosition(m);
+        else if (asset.fitOffsets.has(id)) ownPosition(m, ownedGeometries);
       } else if (isHairMesh(o, matName)) {
         if (Array.isArray(m.material)) {
           for (const mat of m.material) applyHairCutoutRule(mat);
@@ -1450,8 +1461,9 @@ export function buildAvatar(
       garments,
       materials,
       masked,
+      ownedGeometries,
       fitFields: asset.fitOffsets,
-      springs: maskBody ? attachSprings(group, bones, garments, height) : undefined,
+      springs: maskBody ? attachSprings(group, bones, garments, height, ownedGeometries) : undefined,
     };
     (loaded as LoadedFigure & { eyeBox: THREE.Box3 | null; box: THREE.Box3 }).eyeBox = eyeBox;
     (loaded as LoadedFigure & { box: THREE.Box3 }).box = box;
