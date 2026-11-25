@@ -11,7 +11,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { fabricTextures, plasterTexture, woodFloorTexture } from './textures';
-import { NO_MIRROR_LAYER, XR_QUALITY_STEPS, nextXrQualityLevel, xrStartLevel } from './vr';
+import { NO_MIRROR_LAYER, XR_QUALITY_STEPS, XR_VIEWPORT_SCALE_MIN, nextXrQualityLevelAfterScale, nextXrViewportScale, xrStartLevel } from './vr';
 import { MotionGate } from './shadowgate';
 
 export interface Stage {
@@ -33,6 +33,10 @@ export interface Stage {
    *  flat screen and at session start; steps down on its own
    *  while presenting if frame times stay over budget. */
   xrQualityLevel(): number;
+  /** The viewport scale last asked of the headset (vr.ts
+   *  nextXrViewportScale): 1 on the flat screen, at session start,
+   *  and where the browser has no XRView.requestViewportScale. */
+  xrViewportScale(): number;
   tick(timeSec: number): void;
   resize(): void;
   resetView(): void;
@@ -510,6 +514,22 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
   let frameCount = 0;
   let lastFrameAt = -1;
   const XR_EVAL_FRAMES = 90;
+  // ---- XR dynamic resolution ----
+  // Decided on a shorter window than the ladder, and asked of every
+  // view on every frame (a request lasts one frame's getViewport).
+  const XR_SCALE_EVAL_FRAMES = 18;
+  let xrScale = 1;
+  let xrScaleSupported = false;
+  let scaleTimeSum = 0;
+  let scaleFrames = 0;
+
+  /** The current frame's views, where the browser can scale them. */
+  function scalableViews(): readonly XRView[] {
+    const frame = renderer.xr.getFrame() as XRFrame | null;
+    const space = renderer.xr.getReferenceSpace();
+    const views = (frame && space && frame.getViewerPose(space)?.views) || [];
+    return views.length > 0 && typeof views[0].requestViewportScale === 'function' ? views : [];
+  }
 
   // ---- shadow map on demand ----
   // autoUpdate is off; the map is redrawn when (a) a watched bone
@@ -611,6 +631,8 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
     frameTimeSum = 0;
     frameCount = 0;
     lastFrameAt = -1;
+    scaleTimeSum = 0;
+    scaleFrames = 0;
   }
 
   // ---- XR session lifecycle ----
@@ -626,6 +648,8 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
     controls.enabled = false;
     xrFloor = xrStartLevel(navigator.userAgent);
     xrQuality = xrFloor;
+    xrScale = 1;
+    xrScaleSupported = false;
     resetFrameSampling();
     applyXrQuality(xrQuality);
   });
@@ -635,6 +659,8 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
     player.rotation.set(0, 0, 0);
     controls.enabled = true;
     xrQuality = 0;
+    xrScale = 1;
+    xrScaleSupported = false;
     resetFrameSampling();
     mirror.visible = true;
     key.castShadow = true;
@@ -706,11 +732,28 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
     // (CPU-side, measured between ticks — a proxy for frame
     // cost, not a GPU timer; see DESIGN.md §22).
     const now = performance.now();
+    const views = scalableViews();
+    xrScaleSupported = views.length > 0;
     if (lastFrameAt >= 0) {
+      scaleTimeSum += now - lastFrameAt;
+      scaleFrames += 1;
+      if (scaleFrames >= XR_SCALE_EVAL_FRAMES && xrScaleSupported) {
+        xrScale = nextXrViewportScale(xrScale, scaleTimeSum / scaleFrames, views[0].recommendedViewportScale);
+      }
+      if (scaleFrames >= XR_SCALE_EVAL_FRAMES) {
+        scaleTimeSum = 0;
+        scaleFrames = 0;
+      }
       frameTimeSum += now - lastFrameAt;
       frameCount += 1;
       if (frameCount >= XR_EVAL_FRAMES) {
-        const next = nextXrQualityLevel(xrQuality, frameTimeSum / frameCount, xrFloor);
+        // Without viewport scaling the ladder runs as it always did.
+        const next = nextXrQualityLevelAfterScale(
+          xrQuality,
+          frameTimeSum / frameCount,
+          xrFloor,
+          xrScaleSupported ? xrScale : XR_VIEWPORT_SCALE_MIN,
+        );
         resetFrameSampling();
         if (next !== xrQuality) {
           xrQuality = next;
@@ -719,6 +762,7 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
       }
     }
     lastFrameAt = now;
+    for (const view of views) view.requestViewportScale(xrScale);
   }
 
   resize();
@@ -730,6 +774,7 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
     player,
     isPresenting: () => presenting,
     xrQualityLevel: () => xrQuality,
+    xrViewportScale: () => xrScale,
     tick,
     resize,
     resetView,
