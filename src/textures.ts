@@ -355,3 +355,45 @@ export function garmentNormalTexture(hemEdges: ArrayLike<number>, seed: number):
   tex.needsUpdate = true;
   return tex;
 }
+
+/** Resolution of the procedural contact/blob shadow texture. */
+export const BLOB_SHADOW_SIZE = 128;
+
+/** Radial RGBA contact-shadow map (backlog #18): warm charcoal at the
+ *  center with a smooth Gaussian-like falloff that reaches zero well
+ *  before the quad boundary so no hard square edge ever shows. */
+export function blobShadowData(size = BLOB_SHADOW_SIZE): Uint8Array<ArrayBuffer> {
+  const out = new Uint8Array(size * size * 4);
+  const half = (size - 1) / 2;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dx = (x - half) / half;
+      const dy = (y - half) / half;
+      const r = Math.hypot(dx, dy);
+      let alpha = 0;
+      if (r < 1) {
+        const t = Math.max(0, Math.min(1, (1 - r) / 0.35));
+        const edge = t * t * (3 - 2 * t);
+        alpha = Math.exp(-3.2 * r * r) * edge;
+      }
+      const o = (y * size + x) * 4;
+      out[o] = 32;
+      out[o + 1] = 26;
+      out[o + 2] = 20;
+      out[o + 3] = Math.round(alpha * 255);
+    }
+  }
+  return out;
+}
+
+/** Clamped, mipmapped contact-shadow texture built from blobShadowData. */
+export function blobShadowTexture(): THREE.DataTexture {
+  const tex = new THREE.DataTexture(blobShadowData(), BLOB_SHADOW_SIZE, BLOB_SHADOW_SIZE, THREE.RGBAFormat);
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.needsUpdate = true;
+  return tex;
+}
