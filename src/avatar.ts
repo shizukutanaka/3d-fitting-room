@@ -30,6 +30,15 @@ import {
 } from './bodyscale';
 import { skinColorForTone, type CharacterParams } from './character';
 import { isDress, type BottomStyle, type OuterStyle, type PoseId, type ShoeStyle, type TopStyle } from './outfit';
+import {
+  buildSpringBoneSpec,
+  createSpringBoneRuntime,
+  isFlowingHemGarment,
+  reweightHemVertices,
+  type FlowingHemBounds,
+  type SpringBoneRuntime,
+  type Vec3Tuple,
+} from './springbone';
 import { fabricTextures, garmentNormalTexture, leatherTextures, ribbedBump } from './textures';
 
 export type FigureId = 'a' | 'b';
@@ -126,6 +135,8 @@ export interface AvatarRig {
   probeLeaks(on: boolean): void;
   /** How many body triangles are currently left out as covered. */
   maskedTriangles(): number;
+  /** Current Verlet spring-bone state (active segments and max deflection). */
+  springState(): { segments: number; maxDeflectionRad: number };
   tick(timeSec: number, gazeTarget?: THREE.Vector3): void;
 }
 
@@ -934,6 +945,135 @@ interface LoadedFigure {
   /** The body and base-layer meshes whose covered triangles are
    *  left out, with their full triangle lists. */
   masked: { mesh: THREE.SkinnedMesh; full: ArrayLike<number>; cover: Map<string, Uint8Array> }[];
+  /** Live Verlet spring-bone solver sharing the VRMC_springBone spec. */
+  springs?: SpringBoneRuntime;
+}
+
+/** Own a flowing garment's skinning attributes (keeping shared
+ *  positions/normals/UVs/morphs intact) so hem spring reweighting
+ *  does not mutate the cached asset geometry. */
+function ownSkinning(m: THREE.SkinnedMesh): { skinJoints: Uint8Array; skinWeights: Float32Array } {
+  const src = m.geometry;
+  const geo = new THREE.BufferGeometry();
+  for (const [name, attr] of Object.entries(src.attributes)) {
+    if (name === 'skinIndex' || name === 'skinWeight') continue;
+    geo.setAttribute(name, attr);
+  }
+  if (src.index) geo.setIndex(src.index);
+  geo.morphAttributes = src.morphAttributes;
+  geo.morphTargetsRelative = src.morphTargetsRelative;
+  geo.boundingBox = src.boundingBox;
+  geo.boundingSphere = src.boundingSphere;
+
+  const si = src.getAttribute('skinIndex');
+  const sw = src.getAttribute('skinWeight');
+  const count = src.getAttribute('position').count;
+  const skinJoints = new Uint8Array(count * 4);
+  const skinWeights = new Float32Array(count * 4);
+  for (let i = 0; i < count; i++) {
+    for (let k = 0; k < 4; k++) {
+      skinJoints[i * 4 + k] = si.getComponent(i, k);
+      skinWeights[i * 4 + k] = sw.getComponent(i, k);
+    }
+  }
+  geo.setAttribute('skinIndex', new THREE.BufferAttribute(skinJoints, 4));
+  geo.setAttribute('skinWeight', new THREE.BufferAttribute(skinWeights, 4));
+  m.geometry = geo;
+  return { skinJoints, skinWeights };
+}
+
+function attachSprings(
+  group: THREE.Group,
+  bones: Map<string, THREE.Bone>,
+  garments: Map<string, THREE.SkinnedMesh>,
+  height: number,
+  hairStyle: CharacterParams['hairStyle'],
+): SpringBoneRuntime | undefined {
+  group.updateMatrixWorld(true);
+  const bonesMap: Record<string, Vec3Tuple> = {};
+  const tmp = new THREE.Vector3();
+  for (const [name, b] of bones) {
+    b.getWorldPosition(tmp);
+    bonesMap[name] = [tmp.x, tmp.y, tmp.z];
+  }
+  const hips = bonesMap.hips;
+  if (!hips) return undefined;
+
+  let flowingHem: FlowingHemBounds | null = null;
+  for (const [id, mesh] of garments) {
+    if (!isFlowingHemGarment(id)) continue;
+    const pos = mesh.geometry.getAttribute('position');
+    if (!pos || pos.count === 0) continue;
+    let minY = Infinity;
+    let maxRx = 0;
+    let maxRz = 0;
+    for (let i = 0; i < pos.count; i++) {
+      tmp.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld);
+      if (tmp.y < minY) minY = tmp.y;
+      if (tmp.y <= hips[1] + 0.02) {
+        maxRx = Math.max(maxRx, Math.abs(tmp.x - hips[0]));
+        maxRz = Math.max(maxRz, Math.abs(tmp.z - hips[2]));
+      }
+    }
+    if (minY < hips[1] - 0.06) {
+      if (!flowingHem) {
+        flowingHem = { topY: hips[1], bottomY: minY, radiusX: maxRx, radiusZ: maxRz };
+      } else {
+        flowingHem.bottomY = Math.min(flowingHem.bottomY, minY);
+        flowingHem.radiusX = Math.max(flowingHem.radiusX, maxRx);
+        flowingHem.radiusZ = Math.max(flowingHem.radiusZ, maxRz);
+      }
+    }
+  }
+
+  const spec = buildSpringBoneSpec({
+    hairStyle,
+    flowingHem,
+    bones: bonesMap,
+    height,
+  });
+  if (spec.chains.length === 0) return undefined;
+
+  const runtime = createSpringBoneRuntime(spec, bones);
+  group.updateMatrixWorld(true);
+
+  const hemChains = spec.chains.filter((c) => c.category === 'hem');
+  const hemBones: THREE.Bone[] = [];
+  for (const c of hemChains) {
+    for (const j of c.joints) {
+      const b = runtime.bones.get(j.name);
+      if (b) hemBones.push(b);
+    }
+  }
+
+  if (hemBones.length > 0) {
+    const hemInverses = hemBones.map((b) => b.matrixWorld.clone().invert());
+    for (const [id, mesh] of garments) {
+      if (!isFlowingHemGarment(id)) continue;
+      const sk = mesh.skeleton;
+      const extendedBones = [...sk.bones, ...hemBones];
+      const extendedInverses = [...sk.boneInverses.map((m) => m.clone()), ...hemInverses.map((m) => m.clone())];
+      const idxMap = new Map<string, number>();
+      extendedBones.forEach((b, idx) => idxMap.set(b.name, idx));
+
+      const pos = mesh.geometry.getAttribute('position');
+      const worldPos = new Float32Array(pos.count * 3);
+      for (let i = 0; i < pos.count; i++) {
+        tmp.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld);
+        worldPos[i * 3] = tmp.x;
+        worldPos[i * 3 + 1] = tmp.y;
+        worldPos[i * 3 + 2] = tmp.z;
+      }
+
+      const { skinJoints, skinWeights } = ownSkinning(mesh);
+      reweightHemVertices(worldPos, skinJoints, skinWeights, hemChains, idxMap, hips[0], hips[2]);
+      mesh.geometry.getAttribute('skinIndex').needsUpdate = true;
+      mesh.geometry.getAttribute('skinWeight').needsUpdate = true;
+      mesh.bind(new THREE.Skeleton(extendedBones, extendedInverses), mesh.bindMatrix);
+    }
+  }
+
+  return runtime;
 }
 
 /** Give a mesh its own index over the shared vertex data, so one
@@ -994,6 +1134,7 @@ export function buildAvatar(
   const now: JointAngles = poseTargets('stand');
   let gazeYaw = 0;
   let gazePitch = 0;
+  let lastTickSec: number | null = null;
 
   const rig: AvatarRig = {
     root,
@@ -1052,6 +1193,10 @@ export function buildAvatar(
       applyMask();
     },
     maskedTriangles: () => maskedCount,
+    springState: () => ({
+      segments: current?.springs?.segmentCount ?? 0,
+      maxDeflectionRad: current?.springs?.maxDeflectionRad() ?? 0,
+    }),
     tick,
   };
 
@@ -1170,6 +1315,7 @@ export function buildAvatar(
       garments,
       materials,
       masked,
+      springs: maskBody ? attachSprings(group, bones, garments, height, character.hairStyle) : undefined,
     };
     (loaded as LoadedFigure & { eyeBox: THREE.Box3 | null; box: THREE.Box3 }).eyeBox = eyeBox;
     (loaded as LoadedFigure & { box: THREE.Box3 }).box = box;
@@ -1307,6 +1453,8 @@ export function buildAvatar(
     // The satin finish takes a hint of the chosen tone.
     f.body.color.copy(MANNEQUIN_BASE).lerp(new THREE.Color(skinColorForTone(character.skinTone)), 0.35);
     applyHeels();
+    root.updateMatrixWorld(true);
+    f.springs?.reset();
     rig.onMount?.();
   }
 
@@ -1462,6 +1610,12 @@ export function buildAvatar(
     }
     setJoint(j.head, now.head[0] + gazePitch, now.head[1] + gazeYaw, now.head[2]);
     current.group.rotation.y = Math.sin(timeSec * 0.31) * 0.015;
+    if (current.springs) {
+      const dt = lastTickSec === null ? 0 : Math.min(0.05, Math.max(0, timeSec - lastTickSec));
+      lastTickSec = timeSec;
+      root.updateMatrixWorld(true);
+      current.springs.step(dt);
+    }
   }
 
   rig.ready = mount(figure);

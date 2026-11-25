@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import * as THREE from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CHARACTER, HAIR_STYLES } from '../src/character';
 import { parseGlb } from '../src/glb';
@@ -6,6 +7,7 @@ import { DEFAULT_OUTFIT, type Outfit } from '../src/outfit';
 import {
   buildSpringBoneSpec,
   buildVrmcSpringBoneExtension,
+  createSpringBoneRuntime,
   reweightHemVertices,
   type Vec3Tuple,
 } from '../src/springbone';
@@ -37,6 +39,8 @@ globalThis.fetch = (async (input: RequestInfo | URL) => {
 }) as typeof fetch;
 
 const { exportGlb, exportVrm } = await import('../src/export3d');
+const { buildAvatar } = await import('../src/avatar');
+const { applyOutfit } = await import('../src/items');
 
 const SAMPLE_BONES: Record<string, Vec3Tuple> = {
   hips: [0, 0.92, 0],
@@ -215,3 +219,92 @@ describe('VRM export VRMC_springBone integration', { timeout: 60000 }, () => {
     expect(glb.skins[0].joints).toHaveLength(22);
   });
 });
+
+describe('in-app Verlet spring secondary motion (backlog #16)', { timeout: 60000 }, () => {
+  it('deflects under parent motion, respects colliders, and settles back to rest', () => {
+    const root = new THREE.Group();
+    const bones = new Map<string, THREE.Bone>();
+    for (const [name, pos] of Object.entries(SAMPLE_BONES)) {
+      const b = new THREE.Bone();
+      b.name = name;
+      b.position.set(...pos);
+      root.add(b);
+      bones.set(name, b);
+    }
+    root.updateMatrixWorld(true);
+
+    const spec = buildSpringBoneSpec({
+      hairStyle: 'long',
+      flowingHem: { topY: 0.92, bottomY: 0.25, radiusX: 0.16, radiusZ: 0.14 },
+      bones: SAMPLE_BONES,
+      height: 1.7,
+    });
+    const rt = createSpringBoneRuntime(spec, bones);
+    expect(rt.segmentCount).toBeGreaterThan(0);
+
+    // First step initializes rest tails with zero deflection.
+    rt.step(0.016);
+    expect(rt.maxDeflectionRad()).toBeCloseTo(0, 5);
+
+    // Sudden lateral movement triggers Verlet inertia deflection.
+    root.position.x = 0.2;
+    root.updateMatrixWorld(true);
+    rt.step(0.016);
+    const peak = rt.maxDeflectionRad();
+    expect(peak).toBeGreaterThan(0.05);
+    expect(Number.isFinite(peak)).toBe(true);
+
+    // Holding still lets stiffness + drag damp the swing down.
+    for (let i = 0; i < 120; i++) rt.step(0.016);
+    expect(rt.maxDeflectionRad()).toBeLessThan(peak);
+
+    // Reset snaps back cleanly to zero.
+    rt.reset();
+    expect(rt.maxDeflectionRad()).toBeCloseTo(0, 5);
+  });
+
+  it('drives flowing garment hem vertices in the live AvatarRig during tick()', async () => {
+    const outfit: Outfit = {
+      ...DEFAULT_OUTFIT,
+      topStyle: 'tee',
+      bottomStyle: 'skirtLong',
+      outerStyle: 'none',
+      character: { ...DEFAULT_CHARACTER, hairStyle: 'long' },
+    };
+    const rig = buildAvatar(outfit.character);
+    applyOutfit(rig, outfit);
+    await rig.ready;
+
+    expect(rig.springState().segments).toBeGreaterThan(0);
+
+    // Initialize springs at rest, then spin the turntable and tick.
+    rig.tick(0);
+    const skirt = rig.root.getObjectByName('G_skirtLong') as THREE.SkinnedMesh;
+    expect(skirt).toBeDefined();
+
+    // Sample a low hem vertex before and after rapid rotation.
+    const posAttr = skirt.geometry.getAttribute('position');
+    let lowIdx = 0;
+    let minY = Infinity;
+    const v = new THREE.Vector3();
+    for (let i = 0; i < posAttr.count; i++) {
+      const y = posAttr.getY(i);
+      if (y < minY) {
+        minY = y;
+        lowIdx = i;
+      }
+    }
+    skirt.getVertexPosition(lowIdx, v);
+    const beforeLocal = v.clone();
+
+    for (let i = 1; i <= 10; i++) {
+      rig.root.rotation.y += 0.15;
+      rig.tick(i * 0.016);
+    }
+    expect(rig.springState().maxDeflectionRad).toBeGreaterThan(0.02);
+
+    skirt.getVertexPosition(lowIdx, v);
+    expect(v.distanceTo(beforeLocal)).toBeGreaterThan(0.001);
+  });
+});
+
