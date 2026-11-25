@@ -110,7 +110,7 @@ interface Snapshot {
 }
 
 async function snapshotOutfit(outfit: Outfit, figure: FigureId, leg: LegRatio): Promise<Snapshot> {
-  const rig = buildAvatar(outfit.character, figure, leg);
+  const rig = buildAvatar(outfit.character, figure, leg, false);
   applyOutfit(rig, outfit);
   await rig.ready;
   const root = rig.root;
