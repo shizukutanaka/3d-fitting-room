@@ -382,4 +382,27 @@ describe('wardrobe on the skinned mannequin (GLB garments, bone calibration)', {
     expect(sanitizeOutfit({ outerStyle: 'parka' }).outerStyle).toBe('none');
     expect(sanitizeOutfit({ outerColor: '#123456' }).outerColor).toBe(DEFAULT_OUTFIT.outerColor);
   });
+
+  it('switching figures disposes the replaced figure materials without breaking switching back', async () => {
+    const { rig } = await dressed(DEFAULT_OUTFIT);
+    const disposedMats = new Set<THREE.Material>();
+    const mats: THREE.Material[] = [];
+    rig.root.traverse((o) => {
+      if (!(o instanceof THREE.SkinnedMesh)) return;
+      const m = o.material as THREE.Material;
+      if (!mats.includes(m)) {
+        mats.push(m);
+        const orig = m.dispose.bind(m);
+        m.dispose = () => {
+          disposedMats.add(m);
+          orig();
+        };
+      }
+    });
+    expect(mats.length).toBeGreaterThan(10);
+    await rig.setBody('b', 'standard');
+    expect(disposedMats.size).toBe(mats.length);
+    await rig.setBody('a', 'standard');
+    expect(rig.figure()).toBe('a');
+  });
 });

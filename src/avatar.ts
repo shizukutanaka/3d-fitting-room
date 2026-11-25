@@ -1063,6 +1063,11 @@ export function buildAvatar(
       // Re-home anchors before the old figure is dropped.
       for (const a of [head, neckAnchor, bagAnchor, torsoAnchor, bottomAnchor, shoesAnchor]) root.add(a);
       root.remove(current.group);
+      // Dispose per-figure materials and owned masked geometries
+      // (shared asset geometries and cached textures remain intact).
+      current.body.dispose();
+      for (const mat of current.materials.values()) mat.dispose();
+      for (const { mesh } of current.masked) mesh.geometry.dispose();
     }
     current = loaded;
     root.add(loaded.group);
