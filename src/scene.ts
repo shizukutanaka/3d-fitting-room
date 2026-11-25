@@ -11,7 +11,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { fabricTextures, plasterTexture, woodFloorTexture } from './textures';
-import { XR_QUALITY_STEPS, XR_VIEWPORT_SCALE_MIN, nextXrQualityLevelAfterScale, nextXrViewportScale, xrStartLevel } from './vr';
+import { NO_MIRROR_LAYER, XR_QUALITY_STEPS, XR_VIEWPORT_SCALE_MIN, nextXrQualityLevelAfterScale, nextXrViewportScale, xrStartLevel } from './vr';
 import { MotionGate } from './shadowgate';
 
 export interface Stage {
@@ -47,8 +47,11 @@ export interface Stage {
   /** Draw-call cost of one frame, measured on the spot: with the
    *  mirror's reflection pass and without it. The mirror roughly
    *  doubles the scene's draw calls — the number the XR mirror
-   *  resolution decision (below) is based on. */
-  measureDrawCalls(): { withMirror: number; withoutMirror: number; triangles: number };
+   *  resolution decision (below) is based on. `stereo` is the
+   *  same frame drawn through a two-eye ArrayCamera, the path
+   *  three.js takes in an XR session (each eye draws the scene
+   *  and its own reflection pass). */
+  measureDrawCalls(): { withMirror: number; withoutMirror: number; triangles: number; stereo: number };
   /** Redraw the shadow map on the next frame (something that casts
    *  a shadow changed in a way the motion watch cannot see: a
    *  garment shown or hidden, an accessory swapped). */
@@ -143,6 +146,9 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
 
   const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 60);
   camera.position.copy(homePos());
+  // The main view (and the XR eyes, which inherit this mask) also
+  // draws what is kept out of the mirror's reflection pass.
+  camera.layers.enable(NO_MIRROR_LAYER);
 
   // The player rig: in VR the headset pose is expressed in the
   // camera's parent space, so the camera (and, in vr.ts, the
@@ -308,11 +314,17 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
   });
   mirror.position.set(0, 1.42, -2.575);
   scene.add(mirror);
-  const mirrorFrameTop = mesh(new THREE.BoxGeometry(1.62, 0.055, 0.035), brass, 0, 2.6, -2.565);
-  const mirrorFrameBottom = mesh(new THREE.BoxGeometry(1.62, 0.055, 0.035), brass, 0, 0.245, -2.565);
-  const mirrorFrameL = mesh(new THREE.BoxGeometry(0.055, 2.42, 0.035), brass, -0.81, 1.42, -2.565);
-  const mirrorFrameR = mesh(new THREE.BoxGeometry(0.055, 2.42, 0.035), brass, 0.81, 1.42, -2.565);
-  scene.add(mirrorFrameTop, mirrorFrameBottom, mirrorFrameL, mirrorFrameR);
+  // The frame's four bars are instances of one unit box (one draw
+  // call); layoutMirror() below places and sizes them. The frame
+  // lies in the mirror's own plane, so it is never in a reflection.
+  const mirrorFrame = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), brass, 4);
+  mirrorFrame.layers.set(NO_MIRROR_LAYER);
+  scene.add(mirrorFrame);
+  const barMatrix = new THREE.Matrix4();
+  function setBar(i: number, x: number, y: number, w: number, h: number): void {
+    barMatrix.makeScale(w, h, 0.035).setPosition(x, y, -2.565);
+    mirrorFrame.setMatrixAt(i, barMatrix);
+  }
 
   // The mirror follows the subject's height: its glass and frame
   // are re-laid-out so the full figure stays reflectable, from the
@@ -324,13 +336,12 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
     mirror.geometry.dispose();
     mirror.geometry = new THREE.PlaneGeometry(1.5, mirrorH);
     mirror.position.y = centerY;
-    mirrorFrameTop.position.y = bottom + mirrorH + 0.0275;
-    mirrorFrameBottom.position.y = bottom - 0.0275;
-    for (const bar of [mirrorFrameL, mirrorFrameR]) {
-      bar.geometry.dispose();
-      bar.geometry = new THREE.BoxGeometry(0.055, mirrorH + 0.11, 0.035);
-      bar.position.y = centerY;
-    }
+    setBar(0, 0, bottom + mirrorH + 0.0275, 1.62, 0.055);
+    setBar(1, 0, bottom - 0.0275, 1.62, 0.055);
+    setBar(2, -0.81, centerY, 0.055, mirrorH + 0.11);
+    setBar(3, 0.81, centerY, 0.055, mirrorH + 0.11);
+    mirrorFrame.instanceMatrix.needsUpdate = true;
+    mirrorFrame.computeBoundingSphere();
   }
   layoutMirror(subjectHeight);
 
@@ -371,37 +382,41 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
   const bar = mesh(new THREE.CylinderGeometry(0.014, 0.014, 1.36, 12), brass, 0, 1.5, 0);
   bar.rotation.z = Math.PI / 2;
   rackBrass.push(bar);
+  // The three hanging garments are the same shape in three
+  // colors: instances of one mesh (one draw call), tinted by
+  // instance color.
   const garmentColors = ['#97a08a', '#d9cfc0', '#4a4a52'];
-  garmentColors.forEach((color, i) => {
-    const tex = fabricTextures([1.5, 1.5]);
-    const cloth = new THREE.MeshStandardMaterial({
-      color,
-      map: tex.map,
-      bumpMap: tex.bump,
+  const rackTex = fabricTextures([1.5, 1.5]);
+  const rackGarments = new THREE.InstancedMesh(
+    new THREE.LatheGeometry(
+      [
+        new THREE.Vector2(0.012, 0),
+        new THREE.Vector2(0.1, -0.07),
+        new THREE.Vector2(0.055, -0.18),
+        new THREE.Vector2(0.135, -0.54),
+      ],
+      24,
+    ),
+    new THREE.MeshStandardMaterial({
+      map: rackTex.map,
+      bumpMap: rackTex.bump,
       bumpScale: 0.3,
       roughness: 0.9,
       envMapIntensity: 0.3,
       side: THREE.DoubleSide,
-    });
+    }),
+    garmentColors.length,
+  );
+  rackGarments.castShadow = true;
+  const garmentMatrix = new THREE.Matrix4();
+  garmentColors.forEach((color, i) => {
     const x = -0.4 + i * 0.4;
     rackBrass.push(mesh(new THREE.TorusGeometry(0.035, 0.004, 6, 14, Math.PI), brass, x, 1.5, 0));
-    const garment = new THREE.Mesh(
-      new THREE.LatheGeometry(
-        [
-          new THREE.Vector2(0.012, 0),
-          new THREE.Vector2(0.1, -0.07),
-          new THREE.Vector2(0.055, -0.18),
-          new THREE.Vector2(0.135, -0.54),
-        ],
-        24,
-      ),
-      cloth,
-    );
-    garment.position.set(x, 1.47, 0);
-    garment.scale.set(1, 1, 0.45);
-    garment.castShadow = true;
-    rack.add(garment);
+    rackGarments.setMatrixAt(i, garmentMatrix.makeScale(1, 1, 0.45).setPosition(x, 1.47, 0));
+    rackGarments.setColorAt(i, new THREE.Color(color));
   });
+  rackGarments.computeBoundingSphere();
+  rack.add(rackGarments);
   for (const p of rackBrass) rack.add(p);
   const rackBrassMerged = mergeParts(rackBrass, rack, brass);
   for (const p of rackBrass) rack.remove(p);
@@ -658,7 +673,7 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
     }
   });
 
-  function measureDrawCalls(): { withMirror: number; withoutMirror: number; triangles: number } {
+  function measureDrawCalls(): { withMirror: number; withoutMirror: number; triangles: number; stereo: number } {
     const wasMirrorVisible = mirror.visible;
     const wasAutoReset = renderer.info.autoReset;
     // The Reflector re-renders the scene from the mirrored
@@ -676,10 +691,33 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
     renderer.info.reset();
     renderer.render(scene, camera);
     const withMirror = renderer.info.render.calls;
+    // Two eyes side by side through an ArrayCamera, as in XR.
+    const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    camera.updateMatrixWorld();
+    const eyes = [-0.032, 0.032].map((dx, i) => {
+      const eye = new THREE.PerspectiveCamera(camera.fov, size.x / 2 / size.y, camera.near, camera.far);
+      eye.layers.mask = camera.layers.mask;
+      camera.matrixWorld.decompose(eye.position, eye.quaternion, eye.scale);
+      eye.translateX(dx);
+      eye.updateMatrixWorld();
+      eye.viewport = new THREE.Vector4((i * size.x) / 2, 0, size.x / 2, size.y);
+      return eye;
+    });
+    const stereoCam = new THREE.ArrayCamera(eyes);
+    stereoCam.layers.mask = camera.layers.mask;
+    camera.matrixWorld.decompose(stereoCam.position, stereoCam.quaternion, stereoCam.scale);
+    stereoCam.projectionMatrix.copy(camera.projectionMatrix);
+    stereoCam.projectionMatrixInverse.copy(camera.projectionMatrixInverse);
+    renderer.info.reset();
+    renderer.render(scene, stereoCam);
+    const stereo = renderer.info.render.calls;
     mirror.visible = wasMirrorVisible;
     renderer.info.autoReset = wasAutoReset;
     renderer.info.reset();
-    return { withMirror, withoutMirror, triangles };
+    // Leave the canvas showing an ordinary frame.
+    renderer.setViewport(0, 0, canvas.clientWidth || window.innerWidth, canvas.clientHeight || window.innerHeight);
+    renderer.render(scene, camera);
+    return { withMirror, withoutMirror, triangles, stereo };
   }
 
   function tick(): void {

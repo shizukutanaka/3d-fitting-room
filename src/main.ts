@@ -2028,6 +2028,8 @@ const VR_PHOTO_W = 600;
 const VR_PHOTO_H = 750;
 const vrPhotoTarget = new THREE.WebGLRenderTarget(VR_PHOTO_W, VR_PHOTO_H);
 const vrPhotoCam = new THREE.PerspectiveCamera(40, VR_PHOTO_W / VR_PHOTO_H, 0.1, 60);
+// Same layers as the main view (the mirror frame is off layer 0).
+vrPhotoCam.layers.mask = stage.camera.layers.mask;
 let vrPhotoRequested = false;
 
 async function composeVrPhotoCard(): Promise<Blob> {
@@ -2456,7 +2458,7 @@ interface FittingRoomBridge {
   vrPhotoDataURL(): Promise<string | null>;
   /** Draw-call measurement from the stage (scene.ts): one
    *  frame with the mirror's reflection pass and without it. */
-  measureStageStats(): { withMirror: number; withoutMirror: number; triangles: number };
+  measureStageStats(): { withMirror: number; withoutMirror: number; triangles: number; stereo: number };
   /** VR viewpoint alignment state (bodyscale.ts alignViewpoint). */
   getViewpoint(): { entered: boolean; shownHeightM: number; playerY: number; alignment: ViewpointAlignment | null };
   /** Apply the alignment for a headset height, as the first frames
