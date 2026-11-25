@@ -152,6 +152,21 @@ describe('wardrobe on the skinned mannequin (GLB garments, bone calibration)', {
     }
   });
 
+  it('only the body material carries the skin wrap program', async () => {
+    const { rig } = await dressed({ ...DEFAULT_OUTFIT, topStyle: 'tee', outerStyle: 'jacket' });
+    const keys = new Map<string, string>();
+    rig.root.traverse((obj) => {
+      if (!(obj instanceof THREE.Mesh)) return;
+      const mat = obj.material as THREE.Material;
+      const garment = obj.name.startsWith('G_') || obj.parent?.name.startsWith('G_');
+      keys.set(garment ? `garment:${obj.name}` : mat.name, mat.customProgramCacheKey());
+    });
+    expect(keys.get('mannequin')).toBe('skin-wrap');
+    const garments = [...keys].filter(([name]) => name.startsWith('garment:'));
+    expect(garments.length).toBeGreaterThan(3);
+    for (const [, key] of garments) expect(key).not.toBe('skin-wrap');
+  });
+
   it('garments carry a wrinkle and hem normal map without gaining triangles; footwear and the base layer have none', async () => {
     const { rig } = await dressed({ ...DEFAULT_OUTFIT, topStyle: 'tee', outerStyle: 'jacket' });
     const glb = readFileSync('public/models/mannequin-a.glb');

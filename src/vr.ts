@@ -280,6 +280,46 @@ export function nextXrQualityLevel(current: number, avgFrameMs: number, floor = 
 }
 
 // ----------------------------------------------------------------
+// XR dynamic resolution: the first thing to give when frames run
+// long is render resolution, adjusted continuously through
+// XRView.requestViewportScale; the ladder above only steps down
+// once the scale is at its minimum, and only steps back up once
+// the scale is back at 1.
+// ----------------------------------------------------------------
+
+/** The smallest viewport scale asked for (per axis: a quarter of
+ *  the pixels at 0.5). */
+export const XR_VIEWPORT_SCALE_MIN = 0.5;
+/** The most the scale rises in one decision. */
+export const XR_VIEWPORT_SCALE_RISE = 0.05;
+
+/** One viewport-scale decision from a windowed average frame time.
+ *  The browser's XRView.recommendedViewportScale wins when it gives
+ *  one (it sees GPU load; the frame time here is CPU-side). Without
+ *  it: over budget, the scale drops by the square root of the
+ *  overrun, since cost follows the pixel count; with real headroom
+ *  it rises a step at a time; in between it holds. */
+export function nextXrViewportScale(current: number, avgFrameMs: number, recommended?: number | null): number {
+  const clamp = (x: number) => Math.min(Math.max(x, XR_VIEWPORT_SCALE_MIN), 1);
+  if (typeof recommended === 'number' && Number.isFinite(recommended) && recommended > 0) return clamp(recommended);
+  const scale = clamp(current);
+  if (avgFrameMs > XR_FRAME_BUDGET_MS) return clamp(scale * Math.sqrt(XR_FRAME_BUDGET_MS / avgFrameMs));
+  if (avgFrameMs < XR_RECOVER_MS) return clamp(scale + XR_VIEWPORT_SCALE_RISE);
+  return scale;
+}
+
+/** The ladder decision with dynamic resolution in front of it: no
+ *  step down until the viewport scale is at its minimum, no step up
+ *  until it is back at 1. */
+export function nextXrQualityLevelAfterScale(current: number, avgFrameMs: number, floor: number, viewportScale: number): number {
+  const next = nextXrQualityLevel(current, avgFrameMs, floor);
+  const held = Math.min(Math.max(current, floor), XR_QUALITY_STEPS.length - 1);
+  if (next > held && viewportScale > XR_VIEWPORT_SCALE_MIN) return held;
+  if (next < held && viewportScale < 1) return held;
+  return next;
+}
+
+// ----------------------------------------------------------------
 // The panel: a fixed board beside the clothing rack
 // ----------------------------------------------------------------
 
