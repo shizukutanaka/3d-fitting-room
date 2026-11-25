@@ -10,7 +10,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { fabricTextures, plasterTexture, woodFloorTexture } from './textures';
+import { blobShadowTexture, fabricTextures, plasterTexture, woodFloorTexture } from './textures';
 import { NO_MIRROR_LAYER, XR_QUALITY_STEPS, XR_VIEWPORT_SCALE_MIN, nextXrQualityLevelAfterScale, nextXrViewportScale, xrStartLevel } from './vr';
 import { MotionGate } from './shadowgate';
 
@@ -77,6 +77,124 @@ export const MIRROR_XR_PX = 512;
 /** Shadow map edge on the flat screen (XR steps: vr.ts). */
 export const SHADOW_FLAT_PX = 2048;
 
+/** Contact / blob shadow under the character on top of the podium
+ *  (backlog #18): keeps the feet grounded cheaply alongside the
+ *  directional shadow map and stays on even when the XR quality
+ *  ladder disables real-time shadows. */
+export const BLOB_SHADOW_Y = 0.1215;
+export const BLOB_SHADOW_RADIUS = 0.42;
+export const BLOB_SHADOW_OPACITY_WITH_SHADOWS = 0.34;
+export const BLOB_SHADOW_OPACITY_ONLY = 0.5;
+
+export function blobShadowOpacity(shadowsEnabled: boolean): number {
+  return shadowsEnabled ? BLOB_SHADOW_OPACITY_WITH_SHADOWS : BLOB_SHADOW_OPACITY_ONLY;
+}
+
+/** Fixed dynamic-light budget (backlog #8): 1 shadow-casting key
+ *  light + 1 fill light. Room lighting lives in emissive meshes and
+ *  the PMREM environment so shaders never recompile for extra lights. */
+export const DYNAMIC_LIGHT_BUDGET = {
+  total: 2,
+  shadowCasting: 1,
+  fill: 1,
+} as const;
+
+export interface LightAudit {
+  total: number;
+  shadowCasting: number;
+  spot: number;
+  directional: number;
+  point: number;
+  hemisphere: number;
+}
+
+/** Count dynamic lights in a scene subtree for budget verification. */
+export function auditSceneLights(root: THREE.Object3D): LightAudit {
+  const out: LightAudit = { total: 0, shadowCasting: 0, spot: 0, directional: 0, point: 0, hemisphere: 0 };
+  root.traverse((o) => {
+    const l = o as THREE.Light;
+    if (!l.isLight) return;
+    out.total += 1;
+    if (l.castShadow) out.shadowCasting += 1;
+    if ((l as THREE.SpotLight).isSpotLight) out.spot += 1;
+    else if ((l as THREE.DirectionalLight).isDirectionalLight) out.directional += 1;
+    else if ((l as THREE.PointLight).isPointLight) out.point += 1;
+    else if ((l as THREE.HemisphereLight).isHemisphereLight) out.hemisphere += 1;
+  });
+  return out;
+}
+
+/** Procedural environment scene baked into PMREM: starts from
+ *  three.js's RoomEnvironment and adds warm sconce bounce panels and
+ *  a cool rear rim panel so ambient fill, rim highlights, and room
+ *  warmth come from IBL instead of dynamic lights. */
+export function createBoutiqueEnvironment(): THREE.Scene {
+  const env = new RoomEnvironment();
+  const addPanel = (color: string, intensity: number, w: number, h: number, pos: [number, number, number], target: [number, number, number]) => {
+    const mat = new THREE.MeshStandardMaterial({
+      color: '#000000',
+      emissive: color,
+      emissiveIntensity: intensity,
+      roughness: 1,
+      metalness: 0,
+      side: THREE.DoubleSide,
+    });
+    const panel = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+    panel.position.set(...pos);
+    panel.lookAt(...target);
+    env.add(panel);
+  };
+  // Cool back rim panel (replaces the old rim SpotLight).
+  addPanel('#dfe9ff', 3.5, 4.0, 2.6, [-3.0, 3.2, -3.5], [0, 1.2, 0]);
+  // Warm front sconce panels (replaces the two sconce PointLights).
+  addPanel('#ffd5a3', 2.4, 1.8, 1.8, [-2.2, 2.4, 4.5], [0, 1.2, 0]);
+  addPanel('#ffd5a3', 2.4, 1.8, 1.8, [2.2, 2.4, 4.5], [0, 1.2, 0]);
+  // Soft warm ceiling bounce (absorbs the old HemisphereLight).
+  addPanel('#fff4e2', 1.4, 7.0, 7.0, [0, 5.2, 0.5], [0, 0, 0.5]);
+  return env;
+}
+
+/** Add the fixed two-light dynamic rig (1 shadow-casting key SpotLight
+ *  + 1 non-shadow-casting fill DirectionalLight). */
+export function buildLightingRig(scene: THREE.Scene): { key: THREE.SpotLight; fill: THREE.DirectionalLight } {
+  const key = new THREE.SpotLight('#fff1dd', 150, 0, 0.48, 0.82, 1.8);
+  key.name = 'key-light';
+  key.position.set(1.8, 3.2, 2.4);
+  key.castShadow = true;
+  key.shadow.mapSize.set(SHADOW_FLAT_PX, SHADOW_FLAT_PX);
+  key.shadow.bias = -0.0003;
+  key.shadow.normalBias = 0.02;
+  key.shadow.camera.near = 0.5;
+  key.shadow.camera.far = 12;
+  key.target.position.set(0, 0.9, 0);
+  scene.add(key, key.target);
+
+  const fill = new THREE.DirectionalLight('#f4ece4', 0.65);
+  fill.name = 'fill-light';
+  fill.castShadow = false;
+  fill.position.set(-2.5, 2.0, 3.0);
+  scene.add(fill);
+  return { key, fill };
+}
+
+/** Radial-gradient alpha texture for the emissive sconce wall halos
+ *  (replaces the old sconce PointLights' plaster wash). */
+function sconceHaloTexture(): THREE.CanvasTexture {
+  const c = document.createElement('canvas');
+  c.width = 128;
+  c.height = 128;
+  const ctx = c.getContext('2d')!;
+  const g = ctx.createRadialGradient(64, 64, 2, 64, 64, 64);
+  g.addColorStop(0, 'rgba(255, 224, 178, 0.55)');
+  g.addColorStop(0.45, 'rgba(255, 207, 153, 0.22)');
+  g.addColorStop(1, 'rgba(255, 207, 153, 0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 function mesh(geo: THREE.BufferGeometry, material: THREE.Material, x = 0, y = 0, z = 0): THREE.Mesh {
   const m = new THREE.Mesh(geo, material);
   m.position.set(x, y, z);
@@ -132,11 +250,21 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#241f1c');
 
-  // Image-based lighting from a procedural room environment: this is
-  // what makes metals read as metal and skin/fabric sit in the room.
+  // Image-based lighting from a procedural boutique room environment
+  // (warm sconces + cool rim + ceiling bounce baked into PMREM):
+  // carries ambient/room light without dynamic Point/Hemisphere lights.
   const pmrem = new THREE.PMREMGenerator(renderer);
-  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-  scene.environmentIntensity = 0.45;
+  const envScene = createBoutiqueEnvironment();
+  scene.environment = pmrem.fromScene(envScene, 0.04).texture;
+  envScene.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (m.isMesh) {
+      m.geometry.dispose();
+      (m.material as THREE.Material).dispose();
+    }
+  });
+  pmrem.dispose();
+  scene.environmentIntensity = 0.72;
 
   // The framing is expressed relative to the subject's height so a
   // height change (character parameter) reframes instead of cropping.
@@ -173,25 +301,8 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
   controls.enablePan = false;
   controls.autoRotateSpeed = 2.4;
 
-  // ---- lights ----
-  scene.add(new THREE.HemisphereLight('#fff4e2', '#5c4a3a', 0.35));
-  const key = new THREE.SpotLight('#fff1dd', 140, 0, 0.46, 0.8, 1.8);
-  key.position.set(1.8, 3.2, 2.4);
-  key.castShadow = true;
-  key.shadow.mapSize.set(SHADOW_FLAT_PX, SHADOW_FLAT_PX);
-  key.shadow.bias = -0.0003;
-  key.shadow.normalBias = 0.02;
-  key.shadow.camera.near = 0.5;
-  key.shadow.camera.far = 12;
-  key.target.position.set(0, 0.9, 0);
-  scene.add(key, key.target);
-  const rim = new THREE.SpotLight('#dfe9ff', 70, 0, 0.6, 0.9, 1.8);
-  rim.position.set(-2.4, 2.6, -2.0);
-  rim.target.position.set(0, 1.2, 0);
-  scene.add(rim, rim.target);
-  const fill = new THREE.DirectionalLight('#ffe9d2', 0.5);
-  fill.position.set(-2.5, 2.0, 3.0);
-  scene.add(fill);
+  // ---- lights (fixed 2-light budget: 1 shadow key + 1 fill) ----
+  const { key } = buildLightingRig(scene);
 
   // ---- materials ----
   const brass = new THREE.MeshStandardMaterial({
@@ -203,12 +314,12 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
   const wallMat = new THREE.MeshStandardMaterial({
     map: plasterTexture(),
     roughness: 0.95,
-    envMapIntensity: 0.25,
+    envMapIntensity: 0.52,
   });
   const trimMat = new THREE.MeshStandardMaterial({
     color: '#e2d7c4',
     roughness: 0.85,
-    envMapIntensity: 0.3,
+    envMapIntensity: 0.52,
   });
 
   // ---- floor & walls ----
@@ -284,26 +395,44 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
   const trim = mergeParts(trimParts, scene, trimMat);
   for (const p of trimParts) scene.remove(p);
   scene.add(trim);
-  // Sconces on the front wall: they exist mainly to give the mirror
-  // something warm to reflect (two glowing points + lit plaster).
-  // The glow bulbs merge into one mesh, the brass stems join the
-  // scene-level brass merge at the podium below.
-  const glowMat = new THREE.MeshBasicMaterial({ color: '#ffd9a0' });
+  // Sconces on the front wall: emissive bulbs + soft emissive plaster
+  // wash halos give the mirror warm reflections with zero dynamic
+  // PointLights (backlog #8). The glow bulbs merge into one mesh,
+  // the brass stems join the scene-level brass merge at the podium.
+  const glowMat = new THREE.MeshStandardMaterial({
+    color: '#ffd9a0',
+    emissive: '#ffcf99',
+    emissiveIntensity: 2.2,
+    roughness: 0.3,
+    metalness: 0,
+  });
+  const haloMat = new THREE.MeshBasicMaterial({
+    map: sconceHaloTexture(),
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
   const glowParts: THREE.Mesh[] = [];
+  const haloParts: THREE.Mesh[] = [];
   const brassParts: THREE.Mesh[] = [];
   for (const x of [-1.7, 1.7]) {
     const glow = new THREE.Mesh(new THREE.SphereGeometry(0.045, 14, 10), glowMat);
     glow.position.set(x, 2.25, 5.42);
     glowParts.push(glow);
+    const halo = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 1.5), haloMat);
+    halo.position.set(x, 2.25, 5.475);
+    halo.rotation.y = Math.PI;
+    haloParts.push(halo);
     brassParts.push(mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.1, 8), brass, x, 2.36, 5.44));
-    const pt = new THREE.PointLight('#ffcf99', 2.5, 7, 1.8);
-    pt.position.set(x, 2.25, 5.25);
-    scene.add(pt);
   }
   for (const p of glowParts) scene.add(p);
   const glows = mergeParts(glowParts, scene, glowMat);
   for (const p of glowParts) scene.remove(p);
   scene.add(glows);
+  for (const p of haloParts) scene.add(p);
+  const halos = mergeParts(haloParts, scene, haloMat);
+  for (const p of haloParts) scene.remove(p);
+  scene.add(halos);
 
   // ---- the mirror (a real reflection — it is a fitting room) ----
   const mirror = new Reflector(new THREE.PlaneGeometry(1.5, 2.3), {
@@ -359,6 +488,25 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
   podium.position.y = 0.06;
   podium.receiveShadow = true;
   scene.add(podium);
+  const blobShadowMat = new THREE.MeshBasicMaterial({
+    map: blobShadowTexture(),
+    transparent: true,
+    opacity: blobShadowOpacity(true),
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+  });
+  const blobShadow = new THREE.Mesh(
+    new THREE.PlaneGeometry(BLOB_SHADOW_RADIUS * 2, BLOB_SHADOW_RADIUS * 2),
+    blobShadowMat,
+  );
+  blobShadow.name = 'blob-shadow';
+  blobShadow.rotation.x = -Math.PI / 2;
+  blobShadow.position.set(0, BLOB_SHADOW_Y, 0);
+  blobShadow.scale.set(1.0, 0.78, 1.0);
+  blobShadow.renderOrder = 1;
+  scene.add(blobShadow);
   const inlay = mesh(new THREE.TorusGeometry(1.0, 0.007, 8, 72), brass, 0, 0.118, 0);
   inlay.rotation.x = Math.PI / 2;
   brassParts.push(inlay);
@@ -618,6 +766,7 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
       setMirrorResolution(step.mirrorPx);
     }
     key.castShadow = step.shadows;
+    blobShadowMat.opacity = blobShadowOpacity(step.shadows);
     setShadowQuality(step.shadowPx, step.shadowSoft);
     try {
       renderer.xr.setFoveation(step.foveation);
@@ -664,6 +813,7 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
     resetFrameSampling();
     mirror.visible = true;
     key.castShadow = true;
+    blobShadowMat.opacity = blobShadowOpacity(true);
     setShadowQuality(SHADOW_FLAT_PX, true);
     setMirrorResolution(MIRROR_FLAT_PX);
     try {

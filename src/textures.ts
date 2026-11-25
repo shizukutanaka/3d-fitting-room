@@ -231,29 +231,38 @@ export function garmentNormalData(hemEdges: ArrayLike<number>, seed: number, siz
       cx = rand() * size;
       cy = rand() * size;
     }
-    const x0 = cx + (rand() - 0.5) * size * 0.22;
-    const y0 = cy + (rand() - 0.5) * size * 0.22;
+    const x0i = Math.round(cx + (rand() - 0.5) * size * 0.22);
+    const y0i = Math.round(cy + (rand() - 0.5) * size * 0.22);
     const angle = rand() * Math.PI;
     const dx = Math.cos(angle);
     const dy = Math.sin(angle);
     const half = 8 + rand() * 16;
     const width = 1.6 + rand() * 1.8;
     const amp = WRINKLE_HEIGHT_M * (0.4 + rand() * 0.6) * (rand() < 0.5 ? -1 : 1);
-    const reach = Math.ceil(half + width * 3);
-    for (let j = -reach; j <= reach; j++) {
-      for (let i = -reach; i <= reach; i++) {
-        const along = i * dx + j * dy;
-        const across = -i * dy + j * dx;
-        const a = Math.abs(along) / half;
+    const invHalf = 1 / half;
+    const invTwoW2 = 1 / (2 * width * width);
+    const acrossMax = width * 4;
+    const reachX = Math.ceil(half * Math.abs(dx) + acrossMax * Math.abs(dy));
+    const reachY = Math.ceil(half * Math.abs(dy) + acrossMax * Math.abs(dx));
+    for (let j = -reachY; j <= reachY; j++) {
+      const jdy = j * dy;
+      const jdx = j * dx;
+      const row = wrap(y0i + j) * size;
+      for (let i = -reachX; i <= reachX; i++) {
+        const along = i * dx + jdy;
+        const a = Math.abs(along) * invHalf;
         if (a >= 1) continue;
-        const taper = (1 - a * a) * (1 - a * a);
-        h[wrap(Math.round(y0) + j) * size + wrap(Math.round(x0) + i)] += amp * taper * Math.exp(-(across * across) / (2 * width * width));
+        const across = jdx - i * dy;
+        if (Math.abs(across) > acrossMax) continue;
+        const t = 1 - a * a;
+        h[row + wrap(x0i + i)] += amp * t * t * Math.exp(-(across * across) * invTwoW2);
       }
     }
   }
   // Hems: a rounded ridge along every open edge.
   const hem = new Float32Array(size * size);
   const r = HEM_HALF_WIDTH_PX;
+  const invR2 = 1 / (r * r);
   for (let e = 0; e + 3 < hemEdges.length; e += 4) {
     const ax = hemEdges[e] * size;
     const ay = hemEdges[e + 1] * size;
@@ -261,29 +270,42 @@ export function garmentNormalData(hemEdges: ArrayLike<number>, seed: number, siz
     const by = hemEdges[e + 3] * size;
     const ex = bx - ax;
     const ey = by - ay;
-    const len2 = ex * ex + ey * ey || 1;
-    for (let y = Math.floor(Math.min(ay, by) - r); y <= Math.ceil(Math.max(ay, by) + r); y++) {
-      for (let x = Math.floor(Math.min(ax, bx) - r); x <= Math.ceil(Math.max(ax, bx) + r); x++) {
-        const t = Math.min(Math.max(((x - ax) * ex + (y - ay) * ey) / len2, 0), 1);
-        const d = Math.hypot(x - ax - t * ex, y - ay - t * ey) / r;
-        if (d >= 1) continue;
-        const k = wrap(y) * size + wrap(x);
-        hem[k] = Math.max(hem[k], HEM_HEIGHT_M * (1 - d * d));
+    const invLen2 = 1 / (ex * ex + ey * ey || 1);
+    const yMin = Math.floor(Math.min(ay, by) - r);
+    const yMax = Math.ceil(Math.max(ay, by) + r);
+    const xMin = Math.floor(Math.min(ax, bx) - r);
+    const xMax = Math.ceil(Math.max(ax, bx) + r);
+    for (let y = yMin; y <= yMax; y++) {
+      const py = y - ay;
+      const row = wrap(y) * size;
+      for (let x = xMin; x <= xMax; x++) {
+        const px = x - ax;
+        const rawT = (px * ex + py * ey) * invLen2;
+        const t = rawT < 0 ? 0 : rawT > 1 ? 1 : rawT;
+        const ox = px - t * ex;
+        const oy = py - t * ey;
+        const d2 = (ox * ox + oy * oy) * invR2;
+        if (d2 >= 1) continue;
+        const k = row + wrap(x);
+        const v = HEM_HEIGHT_M * (1 - d2);
+        if (v > hem[k]) hem[k] = v;
       }
     }
   }
-  const height = (x: number, y: number) => {
-    const k = wrap(y) * size + wrap(x);
-    return h[k] + hem[k];
-  };
-  const texel = GARMENT_NORMAL_TEXEL_M * (GARMENT_NORMAL_SIZE / size);
+  for (let k = 0; k < h.length; k++) h[k] += hem[k];
+  const invTwoTexel = 1 / (2 * GARMENT_NORMAL_TEXEL_M * (GARMENT_NORMAL_SIZE / size));
   const out = new Uint8Array(size * size * 4);
   for (let y = 0; y < size; y++) {
+    const row = y * size;
+    const rowUp = (y === 0 ? size - 1 : y - 1) * size;
+    const rowDn = (y === size - 1 ? 0 : y + 1) * size;
     for (let x = 0; x < size; x++) {
-      const nx = -(height(x + 1, y) - height(x - 1, y)) / (2 * texel);
-      const ny = -(height(x, y + 1) - height(x, y - 1)) / (2 * texel);
-      const inv = 1 / Math.hypot(nx, ny, 1);
-      const o = (y * size + x) * 4;
+      const xL = x === 0 ? size - 1 : x - 1;
+      const xR = x === size - 1 ? 0 : x + 1;
+      const nx = -(h[row + xR] - h[row + xL]) * invTwoTexel;
+      const ny = -(h[rowDn + x] - h[rowUp + x]) * invTwoTexel;
+      const inv = 1 / Math.sqrt(nx * nx + ny * ny + 1);
+      const o = (row + x) * 4;
       out[o] = Math.round((nx * inv * 0.5 + 0.5) * 255);
       out[o + 1] = Math.round((ny * inv * 0.5 + 0.5) * 255);
       out[o + 2] = Math.round((inv * 0.5 + 0.5) * 255);
@@ -301,6 +323,48 @@ export function garmentNormalTexture(hemEdges: ArrayLike<number>, seed: number):
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.generateMipmaps = true;
   tex.anisotropy = 4;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+/** Resolution of the procedural contact/blob shadow texture. */
+export const BLOB_SHADOW_SIZE = 128;
+
+/** Radial RGBA contact-shadow map (backlog #18): warm charcoal at the
+ *  center with a smooth Gaussian-like falloff that reaches zero well
+ *  before the quad boundary so no hard square edge ever shows. */
+export function blobShadowData(size = BLOB_SHADOW_SIZE): Uint8Array<ArrayBuffer> {
+  const out = new Uint8Array(size * size * 4);
+  const half = (size - 1) / 2;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dx = (x - half) / half;
+      const dy = (y - half) / half;
+      const r = Math.hypot(dx, dy);
+      let alpha = 0;
+      if (r < 1) {
+        const t = Math.max(0, Math.min(1, (1 - r) / 0.35));
+        const edge = t * t * (3 - 2 * t);
+        alpha = Math.exp(-3.2 * r * r) * edge;
+      }
+      const o = (y * size + x) * 4;
+      out[o] = 32;
+      out[o + 1] = 26;
+      out[o + 2] = 20;
+      out[o + 3] = Math.round(alpha * 255);
+    }
+  }
+  return out;
+}
+
+/** Clamped, mipmapped contact-shadow texture built from blobShadowData. */
+export function blobShadowTexture(): THREE.DataTexture {
+  const tex = new THREE.DataTexture(blobShadowData(), BLOB_SHADOW_SIZE, BLOB_SHADOW_SIZE, THREE.RGBAFormat);
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
   tex.needsUpdate = true;
   return tex;
 }
