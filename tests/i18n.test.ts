@@ -1,3 +1,4 @@
+import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   LANGS,
@@ -84,5 +85,35 @@ describe('i18n dictionaries', () => {
         configurable: true,
       });
     }
+  });
+
+  it('has no dead i18n keys unused by src/ or index.html', () => {
+    const srcDir = new URL('../src/', import.meta.url);
+    const corpus = [
+      readFileSync(new URL('../index.html', import.meta.url), 'utf8'),
+      ...readdirSync(srcDir)
+        .filter((f) => f.endsWith('.ts') && f !== 'i18n.ts')
+        .map((f) => readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8')),
+    ].join('\n');
+    const dynamicPrefixes = [
+      'top.',
+      'outer.',
+      'bottom.',
+      'shoe.',
+      'hat.',
+      'glasses.',
+      'accessory.',
+      'pose.',
+      'calib.leg.',
+      'lm.',
+      'body.',
+      'history.',
+      'mutation.',
+    ];
+    const dead = dictionaryKeys('ja').filter((key) => {
+      if (dynamicPrefixes.some((p) => key.startsWith(p))) return false;
+      return !corpus.includes(`'${key}'`) && !corpus.includes(`"${key}"`);
+    });
+    expect(dead).toEqual([]);
   });
 });

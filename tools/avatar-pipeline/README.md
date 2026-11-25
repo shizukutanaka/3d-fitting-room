@@ -37,3 +37,7 @@ Blender -b human_base_meshes_bundle.blend -P build_body.py -- <male body object>
 
 Figures are labelled A / B in the app, never by gender
 (docs/LEGAL-ETHICS.md J-04).
+
+## Material rules
+
+- **Hair materials must use alpha-test cutout (`alphaTest`, glTF `alphaMode: "MASK"`), never transparent blending (`transparent: true` / `"BLEND"`).** Layered hair cards with alpha blending cause heavy overdraw and sort-order artefacts on standalone XR GPUs (Quest). Prefix hair meshes with `H_` (or name the material `*hair*`); the runtime normalizes them via `applyHairCutoutRule` / `createHairMaterial` in `src/avatar.ts` (`HAIR_ALPHA_TEST = 0.5`, `depthWrite = true`, `transparent = false`), and `src/export3d.ts` exports them as `alphaMode: "MASK"`.
