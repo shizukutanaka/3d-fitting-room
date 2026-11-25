@@ -14,14 +14,17 @@ import {
   TOP_STYLES,
 } from '../src/outfit';
 import {
+  META_WEB_LAUNCH_BASE,
   SNAP_TURN_RADIANS,
   VR_PANEL_POSITION,
   XR_FRAME_BUDGET_MS,
   XR_QUALITY_STEPS,
   XR_VIEWPORT_SCALE_MIN,
   XR_VIEWPORT_SCALE_RISE,
+  buildWebLaunchUrl,
   nextXrQualityLevelAfterScale,
   nextXrViewportScale,
+  shouldOfferWebLaunch,
   XR_RECOVER_MS,
   buildVrCategories,
   nextXrQualityLevel,
@@ -264,5 +267,94 @@ describe('XR dynamic resolution (viewport scale ahead of the ladder)', () => {
     expect(nextXrQualityLevelAfterScale(1, 4, 1, 1)).toBe(1);
     // An out-of-range level is still clamped.
     expect(nextXrQualityLevelAfterScale(99, 20, 0, 0.8)).toBe(XR_QUALITY_STEPS.length - 1);
+  });
+});
+describe('Meta Web Launch (backlog #14)', () => {
+  it('encodes an HTTPS experience URL onto Meta Web Launch', () => {
+    const target = 'https://shizukutanaka.github.io/3d-fitting-room/?diag=1';
+    const launch = buildWebLaunchUrl(target);
+    expect(launch).not.toBeNull();
+    const parsed = new URL(launch!);
+    expect(parsed.origin + parsed.pathname).toBe(META_WEB_LAUNCH_BASE);
+    expect(parsed.searchParams.get('url')).toBe(target);
+  });
+
+  it('rejects non-HTTPS and malformed URLs', () => {
+    expect(buildWebLaunchUrl('http://localhost:5173/')).toBeNull();
+    expect(buildWebLaunchUrl('http://example.com/')).toBeNull();
+    expect(buildWebLaunchUrl('file:///index.html')).toBeNull();
+    expect(buildWebLaunchUrl('not a url')).toBeNull();
+  });
+
+  it('offers Web Launch only when immersive-vr is unavailable on an HTTPS page', () => {
+    const httpsPage = 'https://shizukutanaka.github.io/3d-fitting-room/';
+    expect(shouldOfferWebLaunch('unsupported', httpsPage)).toBe(buildWebLaunchUrl(httpsPage));
+    expect(shouldOfferWebLaunch('supported', httpsPage)).toBeNull();
+    expect(shouldOfferWebLaunch('unknown', httpsPage)).toBeNull();
+    expect(shouldOfferWebLaunch('unsupported', 'http://127.0.0.1:8734/')).toBeNull();
+  });
+});
+
+describe('VrPanel redraw memoization', () => {
+  it('skips canvas repaint when only non-panel fields (character/name) change, and repaints on visible changes', async () => {
+    const { VrPanel } = await import('../src/vr');
+    const { setLang } = await import('../src/i18n');
+    const { DEFAULT_OUTFIT } = await import('../src/outfit');
+    const origDoc = (globalThis as Record<string, unknown>).document;
+    let clearCount = 0;
+    const noop = () => {};
+    const ctx = new Proxy(
+      {
+        fillStyle: '',
+        strokeStyle: '',
+        lineWidth: 1,
+        font: '',
+        textAlign: '',
+        textBaseline: '',
+        clearRect: () => {
+          clearCount++;
+        },
+        measureText: (s: string) => ({ width: s.length * 8 }),
+      },
+      { get: (t, k) => (k in t ? (t as Record<string | symbol, unknown>)[k] : noop) },
+    );
+    (globalThis as Record<string, unknown>).document = {
+      createElement: () => ({ width: 0, height: 0, getContext: () => ctx }),
+    };
+    try {
+      setLang('en');
+      const panel = new VrPanel();
+      panel.refresh({ outfit: DEFAULT_OUTFIT, looks: [], page: 0 });
+      expect(clearCount).toBe(1);
+
+      // Slider drags (height, body params) and name edits are not shown on the VR panel.
+      panel.refresh({
+        outfit: {
+          ...DEFAULT_OUTFIT,
+          name: 'Renamed',
+          character: { ...DEFAULT_OUTFIT.character, height: 1.82, waist: 0.7 },
+        },
+        looks: [],
+        page: 0,
+      });
+      expect(clearCount).toBe(1);
+
+      // Visible garment change triggers a repaint.
+      panel.refresh({ outfit: { ...DEFAULT_OUTFIT, topColor: '#ffffff' }, looks: [], page: 0 });
+      expect(clearCount).toBe(2);
+
+      // Page switch triggers a repaint.
+      panel.refresh({ outfit: { ...DEFAULT_OUTFIT, topColor: '#ffffff' }, looks: [], page: 1, diagOn: false });
+      expect(clearCount).toBe(3);
+
+      // Language switch triggers a repaint.
+      setLang('ja');
+      panel.refresh({ outfit: { ...DEFAULT_OUTFIT, topColor: '#ffffff' }, looks: [], page: 1, diagOn: false });
+      expect(clearCount).toBe(4);
+    } finally {
+      setLang('en');
+      if (origDoc === undefined) delete (globalThis as Record<string, unknown>).document;
+      else (globalThis as Record<string, unknown>).document = origDoc;
+    }
   });
 });

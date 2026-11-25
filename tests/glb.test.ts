@@ -279,6 +279,24 @@ describe('GLB skin and extensions', () => {
     expect(json.extensions.VRMC_vrm.specVersion).toBe('1.0');
   });
 
+  it('writes KHR_materials_sheen on sheen materials and appends it to extensionsUsed', () => {
+    const mats: GlbMaterialDef[] = [
+      { ...MATERIALS[0], sheen: { colorFactor: [0.35, 0.2, 0.15], roughnessFactor: 0.8 } },
+      MATERIALS[1],
+    ];
+    const json = parseGlb(
+      buildGlb(PARTS, mats, { generator: 't', extensionsUsed: ['VRMC_vrm'] }),
+    )!.json as any;
+    expect(json.extensionsUsed).toEqual(['VRMC_vrm', 'KHR_materials_sheen']);
+    expect(json.materials[0].extensions).toEqual({
+      KHR_materials_sheen: {
+        sheenColorFactor: [0.35, 0.2, 0.15],
+        sheenRoughnessFactor: 0.8,
+      },
+    });
+    expect(json.materials[1].extensions).toBeUndefined();
+  });
+
   it('rejects a joint without a skin, and a malformed skin', () => {
     expect(() => buildGlb(SKINNED, MATERIALS, { generator: 't' })).toThrow();
     expect(() =>
