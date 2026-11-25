@@ -87,4 +87,46 @@ describe('KHR_materials_sheen export (backlog #20)', { timeout: 60000 }, () => {
     expect(loadedHoodie!.sheenRoughness).toBeCloseTo(0.9, 5);
     expect(loadedHoodie!.sheenColor.r + loadedHoodie!.sheenColor.g + loadedHoodie!.sheenColor.b).toBeGreaterThan(0);
   });
+
+  it('exporting GLB/VRM does not dispose shared cached accessory materials or textures', async () => {
+    const { buildAvatar } = await import('../src/avatar');
+    const { applyOutfit } = await import('../src/items');
+    const { exportGlb } = await import('../src/export3d');
+    const outfit: Outfit = {
+      ...DEFAULT_OUTFIT,
+      hat: 'ribbon',
+      accessory: 'scarf',
+      glasses: 'round',
+    };
+    const liveRig = buildAvatar(outfit.character, 'a', 'standard');
+    applyOutfit(liveRig, outfit);
+    await liveRig.ready;
+
+    const disposed = new Set<object>();
+    const watched = new Set<object>();
+    for (const anchor of [liveRig.hatAnchor, liveRig.glassesAnchor, liveRig.neckAnchor, liveRig.bagAnchor]) {
+      anchor.traverse((obj) => {
+        if (!(obj instanceof THREE.Mesh)) return;
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        for (const m of mats) {
+          if (!watched.has(m)) {
+            watched.add(m);
+            const orig = m.dispose.bind(m);
+            m.dispose = () => { disposed.add(m); orig(); };
+          }
+          const std = m as THREE.MeshStandardMaterial;
+          for (const tex of [std.map, std.bumpMap]) {
+            if (tex && !watched.has(tex)) {
+              watched.add(tex);
+              const origTex = tex.dispose.bind(tex);
+              tex.dispose = () => { disposed.add(tex); origTex(); };
+            }
+          }
+        }
+      });
+    }
+    expect(watched.size).toBeGreaterThan(0);
+    await exportGlb(outfit, 'a', 'standard');
+    expect(disposed.size).toBe(0);
+  });
 });
