@@ -1725,17 +1725,22 @@ export function buildAvatar(
     if (top) rig.topMaterial = top;
   }
 
+  const tickHeadPos = new THREE.Vector3();
+  const tickGazeDiff = new THREE.Vector3();
+  function easeVec3(a: Vec3, b: Vec3, k: number): void {
+    a[0] += (b[0] - a[0]) * k;
+    a[1] += (b[1] - a[1]) * k;
+    a[2] += (b[2] - a[2]) * k;
+  }
+
   function tick(timeSec: number, gazeTarget?: THREE.Vector3): void {
     if (!current) return;
     const k = 0.12;
-    const ease = (a: Vec3, b: Vec3) => {
-      for (let i = 0; i < 3; i++) a[i] += (b[i] - a[i]) * k;
-    };
-    ease(now.ls, target.ls);
-    ease(now.rs, target.rs);
-    ease(now.le, target.le);
-    ease(now.re, target.re);
-    ease(now.head, target.head);
+    easeVec3(now.ls, target.ls, k);
+    easeVec3(now.rs, target.rs, k);
+    easeVec3(now.le, target.le, k);
+    easeVec3(now.re, target.re, k);
+    easeVec3(now.head, target.head, k);
     const j = current.joints;
     // Breathing and a slow weight shift keep the figure alive.
     const breath = Math.sin(timeSec * 1.6) * 0.012;
@@ -1744,10 +1749,14 @@ export function buildAvatar(
     setJoint(j.lla, now.le[0], 0, 0);
     setJoint(j.rla, now.re[0], 0, 0);
     if (gazeTarget) {
-      const hp = head.getWorldPosition(new THREE.Vector3());
-      const d = gazeTarget.clone().sub(hp);
-      const yaw = THREE.MathUtils.clamp(Math.atan2(d.x, d.z), -0.45, 0.45);
-      const pitch = THREE.MathUtils.clamp(-Math.atan2(d.y, Math.hypot(d.x, d.z)), -0.2, 0.2);
+      head.getWorldPosition(tickHeadPos);
+      tickGazeDiff.copy(gazeTarget).sub(tickHeadPos);
+      const yaw = THREE.MathUtils.clamp(Math.atan2(tickGazeDiff.x, tickGazeDiff.z), -0.45, 0.45);
+      const pitch = THREE.MathUtils.clamp(
+        -Math.atan2(tickGazeDiff.y, Math.hypot(tickGazeDiff.x, tickGazeDiff.z)),
+        -0.2,
+        0.2,
+      );
       gazeYaw += (yaw * 0.6 - gazeYaw) * 0.05;
       gazePitch += (pitch * 0.5 - gazePitch) * 0.05;
     } else {
