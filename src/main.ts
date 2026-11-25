@@ -20,7 +20,6 @@ import {
 import { applyOutfit, buildWarmupItems } from './items';
 import { warmUpScene, type WarmupStats } from './warmup';
 import { createStage } from './scene';
-import { composeShareCard, composeShareCardFromImage, downloadBlob } from './share';
 import {
   LANGS,
   LANG_LABELS,
@@ -81,7 +80,6 @@ import {
   type LineageEvent,
   type LineageKind,
 } from './lineage';
-import { extractSeedFromPng } from './cardseed';
 import type { ExportedFile } from './export3d';
 import {
   BODY_PARAM_KEYS,
@@ -99,14 +97,7 @@ import {
   mutationCandidates,
   type MutationStrength,
 } from './mutation';
-import {
-  isValidEndpoint,
-  loadLlmSettings,
-  requestCommands,
-  saveLlmSettings,
-  testConnection,
-  type LlmSettings,
-} from './llm';
+import type { LlmSettings } from './llm';
 import {
   describeCommandProtocol,
   executeCommands,
@@ -114,17 +105,15 @@ import {
   type Command,
   type ExecutionResult,
 } from './commands';
+import type { GeneratedImage, ImagingSettings } from './imaging';
 import {
-  buildImagePrompt,
-  generateImg2Img,
-  generateTxt2Img,
-  loadImagingSettings,
-  saveImagingSettings,
-  testImagingConnection,
-  type GeneratedImage,
-  type ImagingSettings,
-} from './imaging';
-import { createVrRig, vrActionId, type VrLookEntry, type VrRig } from './vr';
+  createVrRig,
+  shouldOfferWebLaunch,
+  vrActionId,
+  type VrLookEntry,
+  type VrRig,
+  type VrSupport,
+} from './vr';
 import { FrameDiagnostics, diagLogJson, formatDiagLines, type DiagEntry } from './diagnostics';
 import { createGpuTimer, type GpuTimer } from './gputimer';
 
@@ -279,14 +268,34 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
+let persistTimer: number | null = null;
+
 /** Persist the current person: the legacy single-save key
  *  (outfit.ts — its autosave behavior is unchanged) and the
  *  roster's current entry, which is the same person as a seed. */
 function persist(): void {
+  if (persistTimer !== null) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
   saveOutfit(outfit);
   roster = upsertCurrent(roster, encodeSeed(outfit));
   saveRoster(roster);
 }
+
+/** Debounced persist for continuous slider drags so dragging does not
+ *  trigger two synchronous localStorage writes on every input event.
+ *  Committed changes call persist() directly; pagehide flushes pending writes. */
+function schedulePersist(): void {
+  if (persistTimer !== null) clearTimeout(persistTimer);
+  persistTimer = window.setTimeout(() => {
+    persistTimer = null;
+    persist();
+  }, 250);
+}
+window.addEventListener('pagehide', () => {
+  if (persistTimer !== null) persist();
+});
 
 // ---- lineage: the on-device edit history (lineage.ts) ----
 // Recorded at the identity-level event points only — a person
@@ -470,7 +479,7 @@ function patchCharacter(patch: Partial<CharacterParams>): void {
     character: sanitizeCharacter({ ...outfit.character, ...patch }),
   };
   showCharacter(outfit.character);
-  persist();
+  schedulePersist();
   const seedEl = document.getElementById('seed-value');
   if (seedEl) seedEl.textContent = encodeSeed(outfit);
 }
@@ -480,7 +489,8 @@ function patchCharacter(patch: Partial<CharacterParams>): void {
 // user saves an endpoint, nothing in this section makes a network
 // request. The chat log is module state so it survives the panel
 // re-renders that outfit changes trigger.
-let llmSettings: LlmSettings = loadLlmSettings();
+let llmMod: typeof import('./llm') | null = null;
+let llmSettings: LlmSettings = { endpoint: '', apiKey: '', model: '' };
 let llmBusy = false;
 let llmStatus: { kind: 'ok' | 'ng'; text: string } | null = null;
 interface ChatEntry {
@@ -488,6 +498,14 @@ interface ChatEntry {
   text: string;
 }
 const chatLog: ChatEntry[] = [];
+
+async function ensureLlmMod(): Promise<typeof import('./llm')> {
+  if (!llmMod) {
+    llmMod = await import('./llm');
+    llmSettings = llmMod.loadLlmSettings();
+  }
+  return llmMod;
+}
 
 // ---- bring-your-own image generation (docs/SD-CONNECT.md) ----
 // The same pattern as the LLM connection above: the product
@@ -499,11 +517,20 @@ const chatLog: ChatEntry[] = [];
 // how it persists, on purpose: localStorage is the wrong size
 // class for generated images, and the image is the user's
 // content to keep where they like.
-let sdSettings: ImagingSettings = loadImagingSettings();
+let imagingMod: typeof import('./imaging') | null = null;
+let sdSettings: ImagingSettings = { endpoint: '', apiKey: '' };
 let sdBusy = false;
 let sdStatus: { kind: 'ok' | 'ng'; text: string } | null = null;
 let sdExtra = '';
 let sdResult: { dataUrl: string; seed: string } | null = null;
+
+async function ensureImagingMod(): Promise<typeof import('./imaging')> {
+  if (!imagingMod) {
+    imagingMod = await import('./imaging');
+    sdSettings = imagingMod.loadImagingSettings();
+  }
+  return imagingMod;
+}
 
 // ---- genetics: synthesize a new person from two seeds ----
 // (CHARACTER-SYSTEM.md §2.5; LEGAL-ETHICS.md judgment J-06.)
@@ -778,15 +805,16 @@ function readSettingsForm(): LlmSettings {
   };
 }
 
-function onSaveSettings(): void {
+async function onSaveSettings(): Promise<void> {
   const candidate = readSettingsForm();
-  if (candidate.endpoint && !isValidEndpoint(candidate.endpoint)) {
+  const llm = await ensureLlmMod();
+  if (candidate.endpoint && !llm.isValidEndpoint(candidate.endpoint)) {
     llmStatus = { kind: 'ng', text: t('llm.invalidEndpoint') };
     renderOptions();
     return;
   }
   llmSettings = candidate;
-  saveLlmSettings(llmSettings);
+  llm.saveLlmSettings(llmSettings);
   llmStatus = { kind: 'ok', text: t('llm.saved') };
   renderOptions();
 }
@@ -796,7 +824,8 @@ async function onTestConnection(): Promise<void> {
   llmBusy = true;
   llmStatus = { kind: 'ok', text: t('llm.testing') };
   renderOptions();
-  const result = await testConnection(candidate);
+  const llm = await ensureLlmMod();
+  const result = await llm.testConnection(candidate);
   llmBusy = false;
   llmStatus = result.ok
     ? {
@@ -827,7 +856,8 @@ async function onSendChat(): Promise<void> {
   llmBusy = true;
   renderOptions();
   try {
-    const outcome = await requestCommands(llmSettings, outfit, text, getLang());
+    const llm = await ensureLlmMod();
+    const outcome = await llm.requestCommands(llmSettings, outfit, text, getLang());
     if (outcome.reply) chatLog.push({ who: 'ai', text: outcome.reply });
     const { validation } = outcome;
     if (validation.commands.length) {
@@ -868,15 +898,16 @@ function readSdForm(): ImagingSettings {
   };
 }
 
-function onSaveSdSettings(): void {
+async function onSaveSdSettings(): Promise<void> {
   const candidate = readSdForm();
-  if (candidate.endpoint && !isValidEndpoint(candidate.endpoint)) {
+  const [llm, imaging] = await Promise.all([ensureLlmMod(), ensureImagingMod()]);
+  if (candidate.endpoint && !llm.isValidEndpoint(candidate.endpoint)) {
     sdStatus = { kind: 'ng', text: t('llm.invalidEndpoint') };
     renderOptions();
     return;
   }
   sdSettings = candidate;
-  saveImagingSettings(sdSettings);
+  imaging.saveImagingSettings(sdSettings);
   sdStatus = { kind: 'ok', text: t('llm.saved') };
   renderOptions();
 }
@@ -886,7 +917,8 @@ async function onTestSdConnection(): Promise<void> {
   sdBusy = true;
   sdStatus = { kind: 'ok', text: t('llm.testing') };
   renderOptions();
-  const result = await testImagingConnection(candidate);
+  const imaging = await ensureImagingMod();
+  const result = await imaging.testImagingConnection(candidate);
   sdBusy = false;
   sdStatus = result.ok
     ? {
@@ -927,17 +959,18 @@ async function onGenerateSd(mode: 'txt2img' | 'img2img'): Promise<void> {
   sdStatus = { kind: 'ok', text: t('sd.generating') };
   renderOptions();
   try {
+    const imaging = await ensureImagingMod();
     let generated: GeneratedImage;
     if (mode === 'img2img') {
       const shot = captureStageImage();
-      const built = buildImagePrompt(outfit, { extra: sdExtra, forImg2Img: true });
-      generated = await generateImg2Img(sdSettings, built, shot.dataUrl, {
+      const built = imaging.buildImagePrompt(outfit, { extra: sdExtra, forImg2Img: true });
+      generated = await imaging.generateImg2Img(sdSettings, built, shot.dataUrl, {
         width: shot.width,
         height: shot.height,
       });
     } else {
-      const built = buildImagePrompt(outfit, { extra: sdExtra });
-      generated = await generateTxt2Img(sdSettings, built);
+      const built = imaging.buildImagePrompt(outfit, { extra: sdExtra });
+      generated = await imaging.generateTxt2Img(sdSettings, built);
     }
     // The seed is captured now, with the image: the person this
     // picture depicts is the person as they are at generation
@@ -963,8 +996,9 @@ function dataUrlToBlob(dataUrl: string): Blob {
   return new Blob([bytes], { type: mime });
 }
 
-function onDownloadSdImage(): void {
+async function onDownloadSdImage(): Promise<void> {
   if (!sdResult) return;
+  const { downloadBlob } = await import('./share');
   downloadBlob(dataUrlToBlob(sdResult.dataUrl), '3d-fitting-room-ai.png');
 }
 
@@ -980,6 +1014,7 @@ async function composeSdCard(): Promise<Blob | null> {
     img.src = result.dataUrl;
   });
   const depicted = decodeSeed(result.seed);
+  const { composeShareCardFromImage } = await import('./share');
   return composeShareCardFromImage(img, {
     appName: t('app.title'),
     workingTitleNote: t('app.workingTitle'),
@@ -993,6 +1028,7 @@ async function composeSdCard(): Promise<Blob | null> {
 async function onSdCard(): Promise<void> {
   const blob = await composeSdCard();
   if (!blob) return;
+  const { downloadBlob } = await import('./share');
   downloadBlob(blob, '3d-fitting-room-card-ai.png');
   showToast(t('sd.cardSaved'));
 }
@@ -1666,6 +1702,11 @@ function renderOptions(): void {
       );
     }
   } else if (activeTab === 'llm') {
+    if (!llmMod || !imagingMod) {
+      void Promise.all([ensureLlmMod(), ensureImagingMod()]).then(() => {
+        if (activeTab === 'llm') renderOptions();
+      });
+    }
     const block = el('div', 'llm-block');
     block.append(el('span', 'group-label', t('llm.settingsTitle')));
     const formRow = (labelKey: I18nKey, id: string, value: string, placeholder: string, type = 'text') => {
@@ -1687,7 +1728,7 @@ function renderOptions(): void {
     block.append(formRow('llm.apiKey', 'llm-apikey', llmSettings.apiKey, '', 'password'));
     block.append(formRow('llm.model', 'llm-model', llmSettings.model, 'llama3.1'));
     const btnRow = el('div', 'chat-row');
-    const saveBtn = chip(t('llm.save'), false, onSaveSettings);
+    const saveBtn = chip(t('llm.save'), false, () => void onSaveSettings());
     saveBtn.id = 'llm-save';
     const testBtn = chip(t('llm.test'), false, () => void onTestConnection());
     testBtn.id = 'llm-test';
@@ -1736,7 +1777,7 @@ function renderOptions(): void {
     );
     block.append(formRow('sd.auth', 'sd-auth', sdSettings.apiKey, '', 'password'));
     const sdBtnRow = el('div', 'chat-row');
-    const sdSaveBtn = chip(t('llm.save'), false, onSaveSdSettings);
+    const sdSaveBtn = chip(t('llm.save'), false, () => void onSaveSdSettings());
     sdSaveBtn.id = 'sd-save';
     const sdTestBtn = chip(t('llm.test'), false, () => void onTestSdConnection());
     sdTestBtn.id = 'sd-test';
@@ -1753,7 +1794,7 @@ function renderOptions(): void {
     const promptPreview = el('textarea', 'sd-prompt');
     promptPreview.id = 'sd-prompt-preview';
     promptPreview.readOnly = true;
-    promptPreview.value = buildImagePrompt(outfit, { extra: sdExtra }).prompt;
+    promptPreview.value = imagingMod ? imagingMod.buildImagePrompt(outfit, { extra: sdExtra }).prompt : '';
     promptPreview.setAttribute('aria-label', t('sd.promptTitle'));
     block.append(promptPreview);
     const extraRow = el('div', 'form-row');
@@ -1769,7 +1810,7 @@ function renderOptions(): void {
       // Keep the module state (and the prompt preview) current
       // without a panel re-render, so typing never loses focus.
       sdExtra = extraInput.value;
-      promptPreview.value = buildImagePrompt(outfit, { extra: sdExtra }).prompt;
+      if (imagingMod) promptPreview.value = imagingMod.buildImagePrompt(outfit, { extra: sdExtra }).prompt;
     });
     extraRow.append(extraLabel, extraInput);
     block.append(extraRow);
@@ -1791,7 +1832,7 @@ function renderOptions(): void {
       img.alt = t('sd.resultTitle');
       block.append(img);
       const resultRow = el('div', 'chat-row');
-      const dlBtn = chip(t('sd.download'), false, onDownloadSdImage);
+      const dlBtn = chip(t('sd.download'), false, () => void onDownloadSdImage());
       dlBtn.id = 'sd-download';
       const cardBtn = chip(t('sd.toCard'), false, () => void onSdCard());
       cardBtn.id = 'sd-card';
@@ -1831,6 +1872,7 @@ cardFileInput.addEventListener('change', () => {
 });
 
 async function applyCardBytes(bytes: Uint8Array): Promise<boolean> {
+  const { extractSeedFromPng } = await import('./cardseed');
   const seed = extractSeedFromPng(bytes);
   if (!seed) return false;
   const decoded = decodeSeed(seed);
@@ -1886,6 +1928,7 @@ function applyStaticTexts(): void {
 
 async function exportPhoto(): Promise<void> {
   stage.renderer.render(stage.scene, stage.camera);
+  const { composeShareCard, downloadBlob } = await import('./share');
   const blob = await composeShareCard(canvas, {
     appName: t('app.title'),
     workingTitleNote: t('app.workingTitle'),
@@ -1914,7 +1957,7 @@ async function export3dFile(format: 'glb' | 'vrm'): Promise<ExportedFile> {
 }
 
 async function downloadExport(format: 'glb' | 'vrm'): Promise<void> {
-  const { bytes } = await export3dFile(format);
+  const [{ bytes }, { downloadBlob }] = await Promise.all([export3dFile(format), import('./share')]);
   downloadBlob(
     new Blob([bytes.buffer as ArrayBuffer], { type: 'model/gltf-binary' }),
     `fitting-room-character.${format}`,
@@ -2070,6 +2113,7 @@ async function composeVrPhotoCard(): Promise<Blob> {
     img.onerror = () => reject(new Error('vr photo image could not be loaded'));
     img.src = c2.toDataURL('image/png');
   });
+  const { composeShareCardFromImage } = await import('./share');
   return composeShareCardFromImage(img, {
     appName: t('app.title'),
     workingTitleNote: t('app.workingTitle'),
@@ -2082,7 +2126,7 @@ async function composeVrPhotoCard(): Promise<Blob> {
 
 async function deliverVrPhoto(): Promise<void> {
   try {
-    const blob = await composeVrPhotoCard();
+    const [blob, { downloadBlob }] = await Promise.all([composeVrPhotoCard(), import('./share')]);
     downloadBlob(blob, '3d-fitting-room.png');
     showToast(t('ui.saved'));
   } catch {
@@ -2115,16 +2159,24 @@ vrRig = createVrRig(stage, {
 // is actually available; where it is not, a note says why (the
 // flat experience is untouched either way). The check is the
 // platform's own — no headset is assumed, none is simulated.
-type VrSupport = 'unknown' | 'supported' | 'unsupported';
 let vrSupport: VrSupport = 'unknown';
 let xrSession: XRSession | null = null;
 
 function renderVrButton(): void {
   const btn = document.getElementById('btn-vr') as HTMLButtonElement | null;
+  const webLaunch = document.getElementById('btn-web-launch') as HTMLAnchorElement | null;
   const note = document.getElementById('vr-note') as HTMLElement | null;
   if (btn) {
     btn.hidden = vrSupport !== 'supported';
     btn.textContent = stage.isPresenting() ? t('vr.exit') : t('vr.enter');
+  }
+  if (webLaunch) {
+    const launchUrl = shouldOfferWebLaunch(vrSupport, window.location.href);
+    webLaunch.hidden = launchUrl === null;
+    if (launchUrl) {
+      webLaunch.href = launchUrl;
+      webLaunch.textContent = t('vr.webLaunch');
+    }
   }
   if (note) {
     note.hidden = vrSupport !== 'unsupported';
@@ -2249,7 +2301,11 @@ function renderDiag(): void {
     root.append(
       text,
       button('Copy log', () => void navigator.clipboard?.writeText(diagJson()).catch(() => undefined)),
-      button('Save log', () => downloadBlob(new Blob([diagJson()], { type: 'application/json' }), 'fitting-room-diagnostics.json')),
+      button('Save log', () => {
+        void import('./share').then(({ downloadBlob }) =>
+          downloadBlob(new Blob([diagJson()], { type: 'application/json' }), 'fitting-room-diagnostics.json'),
+        );
+      }),
       button('Clear', () => {
         diag.clear();
         renderDiag();
@@ -2550,7 +2606,7 @@ const bridge: FittingRoomBridge = {
   }),
   getSdState: () => ({
     configured: Boolean(sdSettings.endpoint),
-    prompt: buildImagePrompt(outfit, { extra: sdExtra }).prompt,
+    prompt: imagingMod ? imagingMod.buildImagePrompt(outfit, { extra: sdExtra }).prompt : '',
     hasResult: sdResult !== null,
     resultSeed: sdResult?.seed ?? null,
   }),
@@ -2566,6 +2622,7 @@ const bridge: FittingRoomBridge = {
   },
   cardDataURL: async () => {
     stage.renderer.render(stage.scene, stage.camera);
+    const { composeShareCard } = await import('./share');
     const blob = await composeShareCard(canvas, {
       appName: t('app.title'),
       workingTitleNote: t('app.workingTitle'),

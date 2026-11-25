@@ -315,7 +315,8 @@ body {
   flex-wrap: wrap;
 }
 
-#actions button {
+#actions button,
+#actions a {
   border: 2px solid var(--accent-soft);
   background: var(--chip);
   color: var(--ink);
@@ -324,6 +325,15 @@ body {
   font-size: 14px;
   font-weight: 700;
   cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#actions button[hidden],
+#actions a[hidden] {
+  display: none;
 }
 
 #actions button.primary {
@@ -368,9 +378,10 @@ body {
 }
 
 /* The VR entry: present only where WebXR can actually enter
-   (main.ts unhides it after the support check); where it cannot,
-   the note below explains why instead of a dead button. */
-#btn-vr {
+   (main.ts unhides it after the support check); on non-VR HTTPS
+   browsers, Web Launch offers the official Quest handoff instead. */
+#actions #btn-vr,
+#actions #btn-web-launch {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
