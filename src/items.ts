@@ -41,21 +41,67 @@ function sheenTint(color: string): THREE.Color {
   return new THREE.Color(color).lerp(new THREE.Color('#ffffff'), 0.35);
 }
 
-function fabricMat(color: string, fabric: AccessoryFabric): THREE.MeshPhysicalMaterial {
-  const tex = fabricTextures([2, 2]);
-  const spec = ACCESSORY_FABRIC[fabric];
-  return new THREE.MeshPhysicalMaterial({
-    name: `fabric-${fabric}`,
-    color,
-    map: tex.map,
-    bumpMap: tex.bump,
-    bumpScale: 0.35,
-    roughness: spec.roughness,
-    metalness: 0,
-    sheen: spec.sheen,
-    sheenRoughness: spec.sheenRoughness,
-    sheenColor: sheenTint(color),
-    envMapIntensity: 0.4,
+// Lazy module-level caches for procedural accessory textures and
+// materials. Accessories have fixed palettes, so sharing them keeps
+// GPU memory bounded across outfit switches AND ensures warmup.ts's
+// initTexture() / compileAsync() warms the exact GPU objects that
+// applyOutfit() later draws (without evicting compiled programs when
+// clearAnchor() removes an accessory's geometries).
+let sharedFabricTex: ReturnType<typeof fabricTextures> | null = null;
+let sharedLeatherTex: ReturnType<typeof leatherTextures> | null = null;
+const ribbedBumpCache = new Map<string, THREE.Texture>();
+const materialCache = new Map<string, THREE.Material>();
+
+function getFabricTex(): ReturnType<typeof fabricTextures> {
+  return (sharedFabricTex ??= fabricTextures([2, 2]));
+}
+
+function getLeatherTex(): ReturnType<typeof leatherTextures> {
+  return (sharedLeatherTex ??= leatherTextures());
+}
+
+function getRibbedBump(repeat: [number, number]): THREE.Texture {
+  const key = `${repeat[0]}x${repeat[1]}`;
+  let tex = ribbedBumpCache.get(key);
+  if (!tex) {
+    tex = ribbedBump(repeat);
+    ribbedBumpCache.set(key, tex);
+  }
+  return tex;
+}
+
+function cachedMat<T extends THREE.Material>(key: string, build: () => T): T {
+  let mat = materialCache.get(key);
+  if (!mat) {
+    mat = build();
+    materialCache.set(key, mat);
+  }
+  return mat as T;
+}
+
+function fabricMat(
+  color: string,
+  fabric: AccessoryFabric,
+  opts?: { ribbed?: [number, number]; bumpScale?: number; side?: THREE.Side },
+): THREE.MeshPhysicalMaterial {
+  const key = `fabric|${fabric}|${color}|${opts?.ribbed?.join('x') ?? ''}|${opts?.bumpScale ?? ''}|${opts?.side ?? ''}`;
+  return cachedMat(key, () => {
+    const tex = getFabricTex();
+    const spec = ACCESSORY_FABRIC[fabric];
+    return new THREE.MeshPhysicalMaterial({
+      name: `fabric-${fabric}`,
+      color,
+      map: tex.map,
+      bumpMap: opts?.ribbed ? getRibbedBump(opts.ribbed) : tex.bump,
+      bumpScale: opts?.bumpScale ?? 0.35,
+      roughness: spec.roughness,
+      metalness: 0,
+      sheen: spec.sheen,
+      sheenRoughness: spec.sheenRoughness,
+      sheenColor: sheenTint(color),
+      envMapIntensity: 0.4,
+      side: opts?.side ?? THREE.FrontSide,
+    });
   });
 }
 
@@ -86,9 +132,7 @@ function buildHat(hat: HatId): THREE.Group | null {
       return g;
     }
     case 'beanie': {
-      const knit = fabricMat('#7d9b8a', 'knit');
-      knit.bumpMap = ribbedBump([16, 1]);
-      knit.bumpScale = 0.5;
+      const knit = fabricMat('#7d9b8a', 'knit', { ribbed: [16, 1], bumpScale: 0.5 });
       const dome = mesh(
         new THREE.SphereGeometry(0.0885, 36, 22, 0, Math.PI * 2, 0, Math.PI * 0.55),
         knit,
@@ -98,9 +142,7 @@ function buildHat(hat: HatId): THREE.Group | null {
       );
       dome.scale.set(0.9, 0.85, 1.1);
       g.add(dome);
-      const bandMat = fabricMat('#6d8a7a', 'knit');
-      bandMat.bumpMap = ribbedBump([22, 1]);
-      bandMat.bumpScale = 0.7;
+      const bandMat = fabricMat('#6d8a7a', 'knit', { ribbed: [22, 1], bumpScale: 0.7 });
       const band = mesh(
         new THREE.CylinderGeometry(0.0895, 0.0905, 0.036, 36, 1, true),
         bandMat,
@@ -114,9 +156,13 @@ function buildHat(hat: HatId): THREE.Group | null {
       return g;
     }
     case 'catears': {
+      const bandMat = cachedMat(
+        'catears-band',
+        () => new THREE.MeshStandardMaterial({ color: '#26262b', roughness: 0.4, metalness: 0.3 }),
+      );
       const band = mesh(
         new THREE.TorusGeometry(0.082, 0.0038, 8, 32, Math.PI),
-        new THREE.MeshStandardMaterial({ color: '#26262b', roughness: 0.4, metalness: 0.3 }),
+        bandMat,
         0,
         -0.122,
         0,
@@ -125,7 +171,10 @@ function buildHat(hat: HatId): THREE.Group | null {
       band.rotation.x = 0.08;
       g.add(band);
       const fur = fabricMat('#5a4232', 'fur');
-      const inner = new THREE.MeshStandardMaterial({ color: '#d98a9e', roughness: 0.9 });
+      const inner = cachedMat(
+        'catears-inner',
+        () => new THREE.MeshStandardMaterial({ color: '#d98a9e', roughness: 0.9 }),
+      );
       for (const side of [-1, 1]) {
         const ear = mesh(new THREE.ConeGeometry(0.021, 0.048, 16), fur, side * 0.052, -0.028, 0);
         ear.rotation.z = -side * 0.28;
@@ -137,16 +186,20 @@ function buildHat(hat: HatId): THREE.Group | null {
       return g;
     }
     case 'ribbon': {
-      const satin = new THREE.MeshPhysicalMaterial({
-        name: 'fabric-satin',
-        color: '#b03050',
-        roughness: ACCESSORY_FABRIC.satin.roughness,
-        metalness: 0,
-        sheen: ACCESSORY_FABRIC.satin.sheen,
-        sheenRoughness: ACCESSORY_FABRIC.satin.sheenRoughness,
-        sheenColor: sheenTint('#b03050'),
-        envMapIntensity: 0.8,
-      });
+      const satin = cachedMat(
+        'ribbon-satin',
+        () =>
+          new THREE.MeshPhysicalMaterial({
+            name: 'fabric-satin',
+            color: '#b03050',
+            roughness: ACCESSORY_FABRIC.satin.roughness,
+            metalness: 0,
+            sheen: ACCESSORY_FABRIC.satin.sheen,
+            sheenRoughness: ACCESSORY_FABRIC.satin.sheenRoughness,
+            sheenColor: sheenTint('#b03050'),
+            envMapIntensity: 0.8,
+          }),
+      );
       const grp = new THREE.Group();
       grp.position.set(0.048, -0.052, 0.028);
       for (const side of [-1, 1]) {
@@ -222,14 +275,18 @@ function buildGlasses(id: GlassesId): THREE.Group | null {
       return g;
     }
     case 'sunglasses': {
-      const dark = new THREE.MeshStandardMaterial({
-        color: '#101014',
-        roughness: 0.08,
-        metalness: 0.1,
-        transparent: true,
-        opacity: 0.94,
-        envMapIntensity: 1.5,
-      });
+      const dark = cachedMat(
+        'sunglasses-dark',
+        () =>
+          new THREE.MeshStandardMaterial({
+            color: '#101014',
+            roughness: 0.08,
+            metalness: 0.1,
+            transparent: true,
+            opacity: 0.94,
+            envMapIntensity: 1.5,
+          }),
+      );
       for (const side of [-1, 1]) {
         const lens = mesh(new THREE.SphereGeometry(1, 24, 16), dark, side * 0.034, -0.002, 0.002);
         lens.scale.set(0.0255, 0.0185, 0.0055);
@@ -277,13 +334,18 @@ function buildAccessory(
       ].map((v) => fit.toNeck(v));
       g.add(mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 48, 0.0022, 8), goldMat, 0, 0, 0));
       const gemAt = fit.toNeck(onFront(fit, 0, ny - 0.1, 0.014));
+      const gemMat = cachedMat(
+        'necklace-gem',
+        () =>
+          new THREE.MeshStandardMaterial({
+            color: '#e58bb1',
+            roughness: 0.12,
+            envMapIntensity: 1.5,
+          }),
+      );
       const gem = mesh(
         new THREE.OctahedronGeometry(0.0095),
-        new THREE.MeshStandardMaterial({
-          color: '#e58bb1',
-          roughness: 0.12,
-          envMapIntensity: 1.5,
-        }),
+        gemMat,
         gemAt.x,
         gemAt.y,
         gemAt.z,
@@ -295,8 +357,7 @@ function buildAccessory(
       // A rolled wrap around the neck's own cross-section, with one
       // end lying on the chest over the clothes.
       if (!fit) return null;
-      const cloth = fabricMat('#a63d46', 'wool');
-      cloth.side = THREE.DoubleSide;
+      const cloth = fabricMat('#a63d46', 'wool', { side: THREE.DoubleSide });
       const tube = 0.016;
       const { y, z, rx, rz } = fit.neck;
       const ring: THREE.Vector3[] = [];
@@ -323,15 +384,17 @@ function buildAccessory(
       // A small crossbody bag at the front of the hip; the strap lies
       // over the worn clothes across the chest to the far shoulder.
       if (!fit) return null;
-      const leatherTex = leatherTextures();
-      const leather = new THREE.MeshStandardMaterial({
-        color: '#7c4a2d',
-        map: leatherTex.map,
-        bumpMap: leatherTex.bump,
-        bumpScale: 0.5,
-        roughness: 0.55,
-        envMapIntensity: 0.7,
-        side: THREE.DoubleSide,
+      const leather = cachedMat('bag-leather', () => {
+        const leatherTex = getLeatherTex();
+        return new THREE.MeshStandardMaterial({
+          color: '#7c4a2d',
+          map: leatherTex.map,
+          bumpMap: leatherTex.bump,
+          bumpScale: 0.5,
+          roughness: 0.55,
+          envMapIntensity: 0.7,
+          side: THREE.DoubleSide,
+        });
       });
       const bx = 0.13;
       const by = fit.hipsY - 0.07;
