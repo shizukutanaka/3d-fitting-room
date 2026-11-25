@@ -80,7 +80,7 @@ import {
   type LineageEvent,
   type LineageKind,
 } from './lineage';
-import { exportGlb, exportVrm, type ExportedFile } from './export3d';
+import type { ExportedFile } from './export3d';
 import {
   BODY_PARAM_KEYS,
   CHARACTER_PARAM_SPECS,
@@ -1923,8 +1923,9 @@ document.getElementById('btn-photo')!.addEventListener('click', () => {
 // app (export3d.ts): built entirely on-device from a throwaway
 // T-posed rig, with the seed and the named-parameter JSON inside
 // the file, so the file describes itself wherever it travels.
-function export3dFile(format: 'glb' | 'vrm'): Promise<ExportedFile> {
+async function export3dFile(format: 'glb' | 'vrm'): Promise<ExportedFile> {
   const fig = rig.figure();
+  const { exportGlb, exportVrm } = await import('./export3d');
   return format === 'vrm' ? exportVrm(outfit, fig, calibration.legRatio) : exportGlb(outfit, fig, calibration.legRatio);
 }
 

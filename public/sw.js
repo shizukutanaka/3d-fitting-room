@@ -1,8 +1,23 @@
-// Offline shell for the PWA: cache-first for same-origin GETs.
-// The app has no backend and no accounts; this worker only makes the
-// toy open instantly and work offline after the first visit.
-const CACHE = 'fitting-room-shell-v1';
+// Offline shell for the PWA:
+// - Immutable Vite-hashed assets (/assets/*) use cache-first.
+// - Unhashed resources (index.html, models/*.glb, manifest) use
+//   network-first with cache fallback so deployed updates reach
+//   existing devices immediately while still working offline.
+// - Only successful same-origin responses (response.ok) are cached.
+const CACHE = 'fitting-room-shell-v2';
 const CORE = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
+
+function isHashedAsset(url) {
+  return /\/assets\/[^/]+-[A-Za-z0-9_-]{6,}\.[a-z0-9]+$/i.test(url.pathname);
+}
+
+function cacheIfOk(request, response) {
+  if (response && response.ok && (response.type === 'basic' || response.type === 'default')) {
+    const copy = response.clone();
+    caches.open(CACHE).then((cache) => cache.put(request, copy));
+  }
+  return response;
+}
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -21,16 +36,21 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const { request } = event;
-  if (request.method !== 'GET' || new URL(request.url).origin !== self.location.origin) return;
+  const url = new URL(request.url);
+  if (request.method !== 'GET' || url.origin !== self.location.origin) return;
+
+  if (isHashedAsset(url)) {
+    event.respondWith(
+      caches.match(request).then(
+        (hit) => hit || fetch(request).then((response) => cacheIfOk(request, response)),
+      ),
+    );
+    return;
+  }
+
   event.respondWith(
-    caches.match(request).then(
-      (hit) =>
-        hit ||
-        fetch(request).then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE).then((cache) => cache.put(request, copy));
-          return response;
-        }),
-    ),
+    fetch(request)
+      .then((response) => cacheIfOk(request, response))
+      .catch(() => caches.match(request)),
   );
 });
