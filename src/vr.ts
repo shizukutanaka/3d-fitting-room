@@ -20,7 +20,7 @@
 
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { t, type I18nKey } from './i18n';
+import { getLang, t, type I18nKey } from './i18n';
 import {
   ACCESSORIES,
   BOTTOM_COLORS,
@@ -521,6 +521,7 @@ export class VrPanel {
   private readonly hitGeometry = new THREE.PlaneGeometry(1, 1);
   private readonly hitMaterial = new THREE.MeshBasicMaterial();
   private ctx: CanvasRenderingContext2D | null = null;
+  private lastRenderKey = '';
 
   constructor() {
     this.group.position.copy(VR_PANEL_POSITION);
@@ -635,11 +636,35 @@ export class VrPanel {
     this.addTarget(actionId, x, y, w, SWATCH_HEIGHT);
   }
 
+  /** Fingerprint of everything actually drawn on the current page.
+   *  Body/height/skin/name edits do not appear on the VR board, so
+   *  comparing this key avoids repainting & re-uploading the 1024px
+   *  CanvasTexture on every slider drag. */
+  private renderKey(state: VrPanelState): string {
+    const parts: string[] = [getLang(), String(state.page)];
+    for (const category of this.categories) {
+      if (category.page !== state.page) continue;
+      parts.push(String(state.outfit[category.field]));
+      if (category.colorField) parts.push(String(state.outfit[category.colorField]));
+    }
+    if (state.page === 0) {
+      for (const look of state.looks.slice(0, VR_LOOKS_SHOWN)) {
+        parts.push(look.id, look.name);
+      }
+    } else {
+      parts.push(state.diagOn === true ? '1' : '0');
+    }
+    return parts.join('\u001f');
+  }
+
   /** Rebuild the board's buttons from the current state. Called
    *  whenever the outfit, the looks, the page or the language
    *  changes — presses are discrete events, so a rebuild per
    *  change is cheap and keeps exactly one source of truth. */
   refresh(state: VrPanelState): void {
+    const key = this.renderKey(state);
+    if (key === this.lastRenderKey) return;
+    this.lastRenderKey = key;
     this.content.clear();
     this.highlight.visible = false;
     this.ctx = this.faceCanvas.getContext('2d');
