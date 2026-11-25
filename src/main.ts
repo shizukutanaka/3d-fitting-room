@@ -106,7 +106,14 @@ import {
   type ExecutionResult,
 } from './commands';
 import type { GeneratedImage, ImagingSettings } from './imaging';
-import { createVrRig, vrActionId, type VrLookEntry, type VrRig } from './vr';
+import {
+  createVrRig,
+  shouldOfferWebLaunch,
+  vrActionId,
+  type VrLookEntry,
+  type VrRig,
+  type VrSupport,
+} from './vr';
 import { FrameDiagnostics, diagLogJson, formatDiagLines, type DiagEntry } from './diagnostics';
 import { createGpuTimer, type GpuTimer } from './gputimer';
 
@@ -2152,16 +2159,24 @@ vrRig = createVrRig(stage, {
 // is actually available; where it is not, a note says why (the
 // flat experience is untouched either way). The check is the
 // platform's own — no headset is assumed, none is simulated.
-type VrSupport = 'unknown' | 'supported' | 'unsupported';
 let vrSupport: VrSupport = 'unknown';
 let xrSession: XRSession | null = null;
 
 function renderVrButton(): void {
   const btn = document.getElementById('btn-vr') as HTMLButtonElement | null;
+  const webLaunch = document.getElementById('btn-web-launch') as HTMLAnchorElement | null;
   const note = document.getElementById('vr-note') as HTMLElement | null;
   if (btn) {
     btn.hidden = vrSupport !== 'supported';
     btn.textContent = stage.isPresenting() ? t('vr.exit') : t('vr.enter');
+  }
+  if (webLaunch) {
+    const launchUrl = shouldOfferWebLaunch(vrSupport, window.location.href);
+    webLaunch.hidden = launchUrl === null;
+    if (launchUrl) {
+      webLaunch.href = launchUrl;
+      webLaunch.textContent = t('vr.webLaunch');
+    }
   }
   if (note) {
     note.hidden = vrSupport !== 'unsupported';

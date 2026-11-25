@@ -14,14 +14,17 @@ import {
   TOP_STYLES,
 } from '../src/outfit';
 import {
+  META_WEB_LAUNCH_BASE,
   SNAP_TURN_RADIANS,
   VR_PANEL_POSITION,
   XR_FRAME_BUDGET_MS,
   XR_QUALITY_STEPS,
   XR_VIEWPORT_SCALE_MIN,
   XR_VIEWPORT_SCALE_RISE,
+  buildWebLaunchUrl,
   nextXrQualityLevelAfterScale,
   nextXrViewportScale,
+  shouldOfferWebLaunch,
   XR_RECOVER_MS,
   buildVrCategories,
   nextXrQualityLevel,
@@ -264,6 +267,31 @@ describe('XR dynamic resolution (viewport scale ahead of the ladder)', () => {
     expect(nextXrQualityLevelAfterScale(1, 4, 1, 1)).toBe(1);
     // An out-of-range level is still clamped.
     expect(nextXrQualityLevelAfterScale(99, 20, 0, 0.8)).toBe(XR_QUALITY_STEPS.length - 1);
+  });
+});
+describe('Meta Web Launch (backlog #14)', () => {
+  it('encodes an HTTPS experience URL onto Meta Web Launch', () => {
+    const target = 'https://shizukutanaka.github.io/3d-fitting-room/?diag=1';
+    const launch = buildWebLaunchUrl(target);
+    expect(launch).not.toBeNull();
+    const parsed = new URL(launch!);
+    expect(parsed.origin + parsed.pathname).toBe(META_WEB_LAUNCH_BASE);
+    expect(parsed.searchParams.get('url')).toBe(target);
+  });
+
+  it('rejects non-HTTPS and malformed URLs', () => {
+    expect(buildWebLaunchUrl('http://localhost:5173/')).toBeNull();
+    expect(buildWebLaunchUrl('http://example.com/')).toBeNull();
+    expect(buildWebLaunchUrl('file:///index.html')).toBeNull();
+    expect(buildWebLaunchUrl('not a url')).toBeNull();
+  });
+
+  it('offers Web Launch only when immersive-vr is unavailable on an HTTPS page', () => {
+    const httpsPage = 'https://shizukutanaka.github.io/3d-fitting-room/';
+    expect(shouldOfferWebLaunch('unsupported', httpsPage)).toBe(buildWebLaunchUrl(httpsPage));
+    expect(shouldOfferWebLaunch('supported', httpsPage)).toBeNull();
+    expect(shouldOfferWebLaunch('unknown', httpsPage)).toBeNull();
+    expect(shouldOfferWebLaunch('unsupported', 'http://127.0.0.1:8734/')).toBeNull();
   });
 });
 
