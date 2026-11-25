@@ -38,6 +38,39 @@ import {
 } from './outfit';
 
 // ----------------------------------------------------------------
+// Meta Web Launch: send an HTTPS experience link from a phone or
+// desktop browser straight to the Meta Quest Browser via the
+// official open_url handoff (`?url=<encoded-https-url>`).
+// ----------------------------------------------------------------
+
+export const META_WEB_LAUNCH_BASE = 'https://www.oculus.com/open_url/';
+
+export type VrSupport = 'unknown' | 'supported' | 'unsupported';
+
+/** Build a Meta Web Launch URL for an HTTPS target page, or null
+ *  when the target is not HTTPS (Meta's Web Launch endpoint only
+ *  accepts HTTPS links, so local http:// dev URLs are excluded). */
+export function buildWebLaunchUrl(targetHref: string): string | null {
+  let target: URL;
+  try {
+    target = new URL(targetHref);
+  } catch {
+    return null;
+  }
+  if (target.protocol !== 'https:') return null;
+  const launch = new URL(META_WEB_LAUNCH_BASE);
+  launch.searchParams.set('url', target.toString());
+  return launch.toString();
+}
+
+/** Return the Web Launch URL when the current browser cannot enter
+ *  immersive-vr directly and the page is served over HTTPS. */
+export function shouldOfferWebLaunch(vrSupport: VrSupport, targetHref: string): string | null {
+  if (vrSupport !== 'unsupported') return null;
+  return buildWebLaunchUrl(targetHref);
+}
+
+// ----------------------------------------------------------------
 // Pure logic: categories, actions, patches, snap turn
 // ----------------------------------------------------------------
 
