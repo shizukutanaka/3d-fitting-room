@@ -29,6 +29,14 @@ import {
   type SourceJoints,
 } from './bodyscale';
 import { skinColorForTone, type CharacterParams } from './character';
+import {
+  FIT_PART_COUNT,
+  applyFitField,
+  computePartOffsets,
+  fitPartForBone,
+  fitPartIndex,
+  type GarmentFitField,
+} from './fitoffset';
 import { isDress, type BottomStyle, type OuterStyle, type PoseId, type ShoeStyle, type TopStyle } from './outfit';
 import { fabricTextures, garmentNormalTexture, leatherTextures, ribbedBump } from './textures';
 
@@ -338,6 +346,7 @@ interface FigureAsset {
   normal: THREE.Texture | null;
   ao: THREE.Texture | null;
   cover: CoverMap;
+  fitOffsets: Map<string, GarmentFitField>;
 }
 
 const assetCache = new Map<FigureId, Promise<FigureAsset>>();
@@ -357,8 +366,8 @@ function loadFigure(id: FigureId): Promise<FigureAsset> {
       tex(`${base}-normal.webp`, false),
       tex(`${base}-ao.webp`, false),
     ]).then(([gltf, normal, ao]) => {
-      keepGarmentsOutside(gltf.scene);
-      return { scene: gltf.scene, normal, ao, cover: coveredByGarments(gltf.scene) };
+      const fitOffsets = keepGarmentsOutside(gltf.scene);
+      return { scene: gltf.scene, normal, ao, cover: coveredByGarments(gltf.scene), fitOffsets };
     });
     assetCache.set(id, p);
   }
@@ -400,13 +409,16 @@ const MAX_CLEARANCE = 0.01;
  *  Push every garment vertex back out along the nearest body normal
  *  so the body never shows through, in bind pose (the garments share
  *  the body's weights, so the gap holds when posed or calibrated). */
-export function keepGarmentsOutside(scene: THREE.Object3D): void {
+export function keepGarmentsOutside(scene: THREE.Object3D): Map<string, GarmentFitField> {
   scene.updateMatrixWorld(true);
   const CELL = 0.04;
   const grid = new Map<string, number[]>();
   const bp: number[] = [];
   const bn: number[] = [];
   const bx: number[] = [];
+  const bw: number[] = [];
+  const fitFields = new Map<string, GarmentFitField>();
+  const defaultPartIdx = fitPartIndex('default');
   const garments: [THREE.Mesh, string][] = [];
   const v = new THREE.Vector3();
   const n = new THREE.Vector3();
@@ -425,18 +437,35 @@ export function keepGarmentsOutside(scene: THREE.Object3D): void {
     nm.getNormalMatrix(m.matrixWorld);
     const si = m.geometry.getAttribute('skinIndex');
     const sw = m.geometry.getAttribute('skinWeight');
-    const extra = ((m as THREE.SkinnedMesh).skeleton?.bones ?? []).map(
-      (b) => PART_EXTRA.find(([re]) => re.test(b.name))?.[1] ?? 0,
-    );
+    const bones = (m as THREE.SkinnedMesh).skeleton?.bones ?? [];
+    const extra = bones.map((b) => PART_EXTRA.find(([re]) => re.test(b.name))?.[1] ?? 0);
+    const boneParts = bones.map((b) => fitPartIndex(fitPartForBone(b.name)));
     for (let i = 0; i < pos.count; i++) {
       v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
       n.fromBufferAttribute(nor, i).applyMatrix3(nm).normalize();
       const k = bp.length / 3;
       bp.push(v.x, v.y, v.z);
       bn.push(n.x, n.y, n.z);
-      // Weighted by the skin weights, so the gap blends between parts.
+      // Weighted by the skin weights, so the gap and part weights blend between parts.
       let x = 0;
-      if (si && sw) for (let c = 0; c < 4; c++) x += sw.getComponent(i, c) * (extra[si.getComponent(i, c)] ?? 0);
+      const wStart = bw.length;
+      for (let p = 0; p < FIT_PART_COUNT; p++) bw.push(0);
+      let wSum = 0;
+      if (si && sw) {
+        for (let c = 0; c < 4; c++) {
+          const wt = sw.getComponent(i, c);
+          if (wt <= 0) continue;
+          const bIdx = si.getComponent(i, c);
+          x += wt * (extra[bIdx] ?? 0);
+          bw[wStart + (boneParts[bIdx] ?? defaultPartIdx)] += wt;
+          wSum += wt;
+        }
+      }
+      if (wSum > 0) {
+        for (let p = 0; p < FIT_PART_COUNT; p++) bw[wStart + p] /= wSum;
+      } else {
+        bw[wStart + defaultPartIdx] = 1;
+      }
       bx.push(x);
       const key = `${Math.floor(v.x / CELL)},${Math.floor(v.y / CELL)},${Math.floor(v.z / CELL)}`;
       const cell = grid.get(key);
@@ -476,6 +505,11 @@ export function keepGarmentsOutside(scene: THREE.Object3D): void {
     inv.copy(m.matrixWorld).invert();
     const layered = TOP_IDS.has(id);
     const under = layered ? new Float32Array(pos.count * 3) : null;
+    const fitRest = clothes ? new Float32Array(pos.count * 3) : null;
+    const fitNorm = clothes ? new Float32Array(pos.count * 3) : null;
+    const fitWeights = clothes ? new Float32Array(pos.count * FIT_PART_COUNT) : null;
+    const fitInward = clothes ? new Float32Array(pos.count) : null;
+    const invLin = new THREE.Matrix3().setFromMatrix4(inv);
     for (let i = 0; i < pos.count; i++) {
       v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
       const [cx, cy, cz] = cellOf(v.x, v.y, v.z);
@@ -484,6 +518,7 @@ export function keepGarmentsOutside(scene: THREE.Object3D): void {
       let ny = 0;
       let nz = 0;
       let gap = 0;
+      let minClear = 0;
       // A push can bring another body vertex nearest: look again.
       for (let pass = 0; pass < 3; pass++) {
         const [px, py, pz] = cellOf(v.x, v.y, v.z);
@@ -516,11 +551,27 @@ export function keepGarmentsOutside(scene: THREE.Object3D): void {
         const clear = clothes
           ? Math.max(Math.min(garmentClearance(id) + bx[bi], MAX_CLEARANCE), baseAround(v.x, v.y, v.z) + overBase + bx[bi])
           : garmentClearance(id);
+        minClear = clear;
         if (gap >= clear) break;
         const push = clear - gap;
         v.set(v.x + nx * push, v.y + ny * push, v.z + nz * push);
         gap = clear;
         pos.setXYZ(i, ...w.copy(v).applyMatrix4(inv).toArray());
+      }
+      if (fitRest && fitNorm && fitWeights && fitInward) {
+        fitRest[3 * i] = pos.getX(i);
+        fitRest[3 * i + 1] = pos.getY(i);
+        fitRest[3 * i + 2] = pos.getZ(i);
+        if (bi >= 0) {
+          w.set(nx, ny, nz).applyMatrix3(invLin);
+          fitNorm[3 * i] = w.x;
+          fitNorm[3 * i + 1] = w.y;
+          fitNorm[3 * i + 2] = w.z;
+          const bwBase = bi * FIT_PART_COUNT;
+          const fwBase = i * FIT_PART_COUNT;
+          for (let p = 0; p < FIT_PART_COUNT; p++) fitWeights[fwBase + p] = bw[bwBase + p];
+          fitInward[i] = Math.max(0, gap - minClear);
+        }
       }
       if (bi < 0) continue;
       if (isBase) {
@@ -546,8 +597,19 @@ export function keepGarmentsOutside(scene: THREE.Object3D): void {
       m.geometry.morphTargetsRelative = true;
       m.updateMorphTargets();
     }
+    if (fitRest && fitNorm && fitWeights && fitInward) {
+      fitFields.set(id, {
+        id,
+        isOuter,
+        restPos: fitRest,
+        localNormal: fitNorm,
+        partWeights: fitWeights,
+        maxInward: fitInward,
+      });
+    }
     m.geometry.computeBoundingSphere();
   }
+  return fitFields;
 }
 
 /** How far (m) out along its normal a body vertex looks for the
@@ -934,6 +996,8 @@ interface LoadedFigure {
   /** The body and base-layer meshes whose covered triangles are
    *  left out, with their full triangle lists. */
   masked: { mesh: THREE.SkinnedMesh; full: ArrayLike<number>; cover: Map<string, Uint8Array> }[];
+  /** Body-linked fit-offset fields per clothing garment (backlog #12). */
+  fitFields: Map<string, GarmentFitField>;
 }
 
 /** Give a mesh its own index over the shared vertex data, so one
@@ -947,6 +1011,26 @@ function ownIndex(m: THREE.SkinnedMesh): ArrayLike<number> | null {
   geo.boundingSphere = src.boundingSphere;
   m.geometry = geo;
   return src.index.array;
+}
+
+/** Give a garment mesh its own position attribute over the shared
+ *  vertex data so body-linked fit offsets never mutate assetCache. */
+function ownPosition(m: THREE.SkinnedMesh): void {
+  const src = m.geometry;
+  const pos = src.getAttribute('position');
+  if (!pos) return;
+  const geo = new THREE.BufferGeometry();
+  for (const [name, attr] of Object.entries(src.attributes)) {
+    geo.setAttribute(name, name === 'position' ? new THREE.BufferAttribute(new Float32Array(pos.array), 3) : attr);
+  }
+  if (src.index) geo.setIndex(src.index);
+  if (src.morphAttributes && Object.keys(src.morphAttributes).length > 0) {
+    geo.morphAttributes = src.morphAttributes;
+    geo.morphTargetsRelative = src.morphTargetsRelative;
+  }
+  geo.boundingSphere = src.boundingSphere;
+  m.geometry = geo;
+  if (Object.keys(geo.morphAttributes).length > 0) m.updateMorphTargets();
 }
 
 const PROBE_HIDDEN = new THREE.MeshBasicMaterial({ color: '#000000', side: THREE.DoubleSide });
@@ -1117,6 +1201,7 @@ export function buildAvatar(
         garments.set(id, m);
         m.visible = id === 'base';
         if (id === 'base') mask(m, 'base');
+        else if (asset.fitOffsets.has(id)) ownPosition(m);
       } else {
         if (matName === 'mannequin') mask(m, 'body');
         m.material = body;
@@ -1170,6 +1255,7 @@ export function buildAvatar(
       garments,
       materials,
       masked,
+      fitFields: asset.fitOffsets,
     };
     (loaded as LoadedFigure & { eyeBox: THREE.Box3 | null; box: THREE.Box3 }).eyeBox = eyeBox;
     (loaded as LoadedFigure & { box: THREE.Box3 }).box = box;
@@ -1306,8 +1392,23 @@ export function buildAvatar(
     b('head')?.scale.setScalar(s.head);
     // The satin finish takes a hint of the chosen tone.
     f.body.color.copy(MANNEQUIN_BASE).lerp(new THREE.Color(skinColorForTone(character.skinTone)), 0.35);
+    applyFitOffsets();
     applyHeels();
     rig.onMount?.();
+  }
+
+  /** Shift clothing vertices along body normals in proportion to
+   *  regional body-shape changes (backlog #12). */
+  function applyFitOffsets(): void {
+    if (!current || !scales) return;
+    for (const [id, field] of current.fitFields) {
+      const m = current.garments.get(id);
+      if (!m) continue;
+      const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute;
+      const offsets = computePartOffsets(character, scales, field.isOuter);
+      applyFitField(field, offsets, pos.array as Float32Array);
+      pos.needsUpdate = true;
+    }
   }
 
   /** Pumps raise the heel: the feet flex at the ankle with the toes
