@@ -193,6 +193,44 @@ function garmentMaterial(name: string): THREE.MeshPhysicalMaterial {
 
 const MANNEQUIN_BASE = new THREE.Color('#e7e1d7');
 
+// ---- skin wrap lighting ----
+// A cheap stand-in for subsurface scattering, on the body material
+// only: direct diffuse light wraps past the terminator instead of
+// cutting off at 90 degrees, and the band where the light grazes the
+// surface takes a reddish tint. Specular, clearcoat and indirect
+// light are untouched. No extra texture, pass or uniform.
+/** How far past the terminator the diffuse term reaches (0 = Lambert). */
+export const SKIN_WRAP = 0.25;
+/** Linear tint at the centre of the grazing band. */
+export const SKIN_SCATTER_TINT = new THREE.Color(1, 0.42, 0.32);
+const SKIN_DIFFUSE_LINE = 'reflectedLight.directDiffuse += irradiance * BRDF_Lambert( material.diffuseColor );';
+
+/** The physical lighting chunk with the direct diffuse line swapped
+ *  for the wrapped one. Throws if three.js no longer has that line,
+ *  so an upgrade cannot silently drop the effect. */
+export function skinWrapLightingChunk(): string {
+  const chunk = THREE.ShaderChunk.lights_physical_pars_fragment;
+  if (chunk.split(SKIN_DIFFUSE_LINE).length !== 2) throw new Error('skin wrap: direct diffuse line not found');
+  const t = SKIN_SCATTER_TINT;
+  return chunk.replace(
+    SKIN_DIFFUSE_LINE,
+    `float skinNL = dot( geometryNormal, directLight.direction );
+	float skinWrap = saturate( ( skinNL + ${SKIN_WRAP.toFixed(3)} ) / ${(1 + SKIN_WRAP).toFixed(3)} );
+	float skinGraze = smoothstep( 0.0, 0.5, skinWrap ) * ( 1.0 - smoothstep( 0.25, 0.75, skinWrap ) );
+	vec3 skinTint = mix( vec3( 1.0 ), vec3( ${t.r.toFixed(3)}, ${t.g.toFixed(3)}, ${t.b.toFixed(3)} ), skinGraze );
+	reflectedLight.directDiffuse += skinWrap * skinTint * directLight.color * BRDF_Lambert( material.diffuseColor );`,
+  );
+}
+
+/** Give a skin material the wrapped diffuse term. */
+export function applySkinWrap(material: THREE.MeshPhysicalMaterial): void {
+  const chunk = skinWrapLightingChunk();
+  material.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace('#include <lights_physical_pars_fragment>', chunk);
+  };
+  material.customProgramCacheKey = () => 'skin-wrap';
+}
+
 // ---------- asset loading ----------
 
 interface FigureAsset {
@@ -744,6 +782,7 @@ export function buildAvatar(initial: CharacterParams, figure: FigureId = 'a', le
       aoMapIntensity: 0.85,
       envMapIntensity: 0.7,
     });
+    applySkinWrap(body);
     const box = new THREE.Box3();
     let eyeBox: THREE.Box3 | null = null;
     group.traverse((o) => {
