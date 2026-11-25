@@ -344,20 +344,17 @@ async function snapshotOutfit(
 
 /** Release the throwaway rig. Skinned meshes share geometry and
  *  baked maps with the live mannequin (avatar.ts asset cache), so
- *  only their per-rig materials go; accessories are fully owned. */
+ *  only their per-rig materials go; accessories own their geometry
+ *  while sharing cached materials and textures in items.ts. */
 function disposeRig(rig: AvatarRig): void {
   rig.root.traverse((obj) => {
     if (!(obj instanceof THREE.Mesh)) return;
-    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-    if (!(obj instanceof THREE.SkinnedMesh)) {
+    if (obj instanceof THREE.SkinnedMesh) {
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      for (const m of mats) m.dispose();
+    } else {
       obj.geometry.dispose();
-      for (const m of mats) {
-        const std = m as THREE.MeshStandardMaterial;
-        std.map?.dispose();
-        std.bumpMap?.dispose();
-      }
     }
-    for (const m of mats) m.dispose();
   });
 }
 
