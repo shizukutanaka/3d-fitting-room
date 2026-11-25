@@ -161,6 +161,11 @@ async function snapshotOutfit(outfit: Outfit, figure: FigureId, leg: LegRatio): 
     if (known !== undefined) return known;
     const std = mat as THREE.MeshStandardMaterial;
     const color = std.color;
+    const alphaMode: GlbMaterialDef['alphaMode'] = std.transparent
+      ? 'BLEND'
+      : std.alphaTest > 0
+        ? 'MASK'
+        : 'OPAQUE';
     let sheen: GlbMaterialDef['sheen'];
     if (mat instanceof THREE.MeshPhysicalMaterial && mat.sheen > 0) {
       const c = mat.sheenColor;
@@ -179,7 +184,8 @@ async function snapshotOutfit(outfit: Outfit, figure: FigureId, leg: LegRatio): 
       baseColorFactor: color ? [color.r, color.g, color.b, std.opacity ?? 1] : [1, 1, 1, std.opacity ?? 1],
       roughnessFactor: std.roughness ?? 1,
       metallicFactor: std.metalness ?? 0,
-      alphaMode: std.transparent ? 'BLEND' : 'OPAQUE',
+      alphaMode,
+      ...(alphaMode === 'MASK' ? { alphaCutoff: std.alphaTest } : {}),
       doubleSided: std.side === THREE.DoubleSide,
       ...(sheen ? { sheen } : {}),
     });

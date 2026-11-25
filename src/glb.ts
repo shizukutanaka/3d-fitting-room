@@ -25,7 +25,8 @@ export interface GlbMaterialDef {
   baseColorFactor: [number, number, number, number];
   roughnessFactor: number;
   metallicFactor: number;
-  alphaMode?: 'OPAQUE' | 'BLEND';
+  alphaMode?: 'OPAQUE' | 'MASK' | 'BLEND';
+  alphaCutoff?: number;
   doubleSided?: boolean;
   /** Optional KHR_materials_sheen parameters (linear-sRGB colorFactor
    *  pre-multiplied by sheen weight, plus roughnessFactor in [0, 1]). */
@@ -333,6 +334,7 @@ export function buildGlb(
         },
       };
       if (m.alphaMode && m.alphaMode !== 'OPAQUE') mat.alphaMode = m.alphaMode;
+      if (m.alphaMode === 'MASK' && m.alphaCutoff !== undefined) mat.alphaCutoff = m.alphaCutoff;
       if (m.doubleSided) mat.doubleSided = true;
       if (m.sheen) {
         mat.extensions = {
