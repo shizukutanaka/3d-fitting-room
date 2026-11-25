@@ -204,7 +204,6 @@ async function snapshotOutfit(
     });
 
     const springSpec = buildSpringBoneSpec({
-      hairStyle: outfit.character.hairStyle,
       flowingHem,
       bones: bonesMap,
       height: outfit.character.height,

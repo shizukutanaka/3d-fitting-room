@@ -1,10 +1,12 @@
-// Single source of truth for spring secondary motion (hair and
-// flowing garment hems). Pure data and math — no renderer or DOM —
-// so the VRM 1.0 VRMC_springBone exporter (src/export3d.ts) and the
-// in-app Verlet solver (src/avatar.ts) share the exact same chain
-// topology, joint parameters, and body colliders.
-
-import type { HairStyleId } from './character';
+// Single source of truth for spring secondary motion (flowing garment
+// hems). Pure data and math — no renderer or DOM — so the VRM 1.0
+// VRMC_springBone exporter (src/export3d.ts) and the in-app Verlet
+// solver (src/avatar.ts) share the exact same chain topology, joint
+// parameters, and body colliders.
+//
+// Note: the sculpted mannequin has no hair meshes (DESIGN.md §26),
+// so only flowing garment hems that actually drive skinned vertices
+// emit spring chains.
 
 export type Vec3Tuple = [number, number, number];
 
@@ -21,8 +23,8 @@ export interface SpringJointSpec {
 
 export interface SpringChainSpec {
   name: string;
-  category: 'hair' | 'hem';
-  /** Humanoid bone name the root joint attaches to (e.g. 'head', 'hips'). */
+  category: 'hem';
+  /** Humanoid bone name the root joint attaches to (e.g. 'hips'). */
   parentBone: string;
   colliderGroups: string[];
   /** Ordered root-to-tip joints; length >= 2 per VRMC_springBone 1.0. */
@@ -63,7 +65,6 @@ export interface FlowingHemBounds {
 }
 
 export interface SpringBoneSpecInput {
-  hairStyle: HairStyleId;
   flowingHem?: FlowingHemBounds | null;
   /** World-space T-pose / rest positions of the humanoid bones (meters). */
   bones: Record<string, Vec3Tuple>;
@@ -95,112 +96,17 @@ function sub3(a: Vec3Tuple, b: Vec3Tuple): Vec3Tuple {
   return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 }
 
-function scale3(v: Vec3Tuple, s: number): Vec3Tuple {
-  return [v[0] * s, v[1] * s, v[2] * s];
-}
-
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
 }
-
-interface HairPreset {
-  segments: number;
-  length: number;
-  stiffness: number;
-  dragForce: number;
-  gravityPower: number;
-  hitRadius: number;
-  chains: Array<{ name: string; rootOffset: Vec3Tuple; dir: Vec3Tuple }>;
-}
-
-const HAIR_PRESETS: Record<HairStyleId, HairPreset> = {
-  long: {
-    segments: 2,
-    length: 0.34,
-    stiffness: 0.85,
-    dragForce: 0.45,
-    gravityPower: 0.35,
-    hitRadius: 0.025,
-    chains: [
-      { name: 'hairBack', rootOffset: [0, 0.04, -0.09], dir: [0, -0.98, -0.2] },
-      { name: 'hairLeft', rootOffset: [0.075, 0.03, -0.02], dir: [0.12, -0.99, -0.05] },
-      { name: 'hairRight', rootOffset: [-0.075, 0.03, -0.02], dir: [-0.12, -0.99, -0.05] },
-    ],
-  },
-  bob: {
-    segments: 2,
-    length: 0.18,
-    stiffness: 1.35,
-    dragForce: 0.5,
-    gravityPower: 0.25,
-    hitRadius: 0.022,
-    chains: [
-      { name: 'hairBack', rootOffset: [0, 0.04, -0.085], dir: [0, -0.98, -0.2] },
-      { name: 'hairLeft', rootOffset: [0.075, 0.03, -0.01], dir: [0.1, -0.99, -0.05] },
-      { name: 'hairRight', rootOffset: [-0.075, 0.03, -0.01], dir: [-0.1, -0.99, -0.05] },
-    ],
-  },
-  ponytail: {
-    segments: 3,
-    length: 0.36,
-    stiffness: 0.7,
-    dragForce: 0.4,
-    gravityPower: 0.4,
-    hitRadius: 0.028,
-    chains: [
-      { name: 'hairPonytail', rootOffset: [0, 0.06, -0.1], dir: [0, -0.94, -0.34] },
-    ],
-  },
-  short: {
-    segments: 1,
-    length: 0.09,
-    stiffness: 2.0,
-    dragForce: 0.6,
-    gravityPower: 0.15,
-    hitRadius: 0.02,
-    chains: [
-      { name: 'hairBack', rootOffset: [0, 0.04, -0.085], dir: [0, -0.95, -0.3] },
-      { name: 'hairSide', rootOffset: [0.065, 0.04, 0.01], dir: [0.2, -0.98, 0] },
-    ],
-  },
-  bun: {
-    segments: 1,
-    length: 0.08,
-    stiffness: 2.2,
-    dragForce: 0.6,
-    gravityPower: 0.12,
-    hitRadius: 0.03,
-    chains: [
-      { name: 'hairBun', rootOffset: [0, 0.11, -0.085], dir: [0, -0.7, -0.71] },
-    ],
-  },
-};
 
 function buildColliders(bones: Record<string, Vec3Tuple>, scale: number): {
   colliders: SpringColliderSpec[];
   colliderGroups: SpringColliderGroupSpec[];
 } {
   const colliders: SpringColliderSpec[] = [];
-  const headIds: string[] = [];
-  const torsoIds: string[] = [];
   const legIds: string[] = [];
 
-  if (bones.head) {
-    colliders.push({
-      id: 'col_head',
-      bone: 'head',
-      shape: { sphere: { offset: [0, 0.07 * scale, 0.005 * scale], radius: 0.095 * scale } },
-    });
-    headIds.push('col_head');
-  }
-  if (bones.upperChest) {
-    colliders.push({
-      id: 'col_upperChest',
-      bone: 'upperChest',
-      shape: { sphere: { offset: [0, 0.02 * scale, 0], radius: 0.125 * scale } },
-    });
-    torsoIds.push('col_upperChest');
-  }
   if (bones.hips) {
     colliders.push({
       id: 'col_hips',
@@ -247,48 +153,9 @@ function buildColliders(bones: Record<string, Vec3Tuple>, scale: number): {
   }
 
   const colliderGroups: SpringColliderGroupSpec[] = [];
-  if (headIds.length) colliderGroups.push({ name: 'head', colliderIds: headIds });
-  if (torsoIds.length) colliderGroups.push({ name: 'torso', colliderIds: torsoIds });
   if (legIds.length) colliderGroups.push({ name: 'legs', colliderIds: legIds });
 
   return { colliders, colliderGroups };
-}
-
-function buildHairChains(
-  hairStyle: HairStyleId,
-  bones: Record<string, Vec3Tuple>,
-  scale: number,
-  groupNames: Set<string>,
-): SpringChainSpec[] {
-  if (!bones.head) return [];
-  const preset = HAIR_PRESETS[hairStyle] ?? HAIR_PRESETS.bob;
-  const step = (preset.length * scale) / preset.segments;
-  const groups = ['head', 'torso'].filter((g) => groupNames.has(g));
-
-  return preset.chains.map((def) => {
-    const joints: SpringJointSpec[] = [];
-    for (let i = 0; i <= preset.segments; i++) {
-      const t = i / preset.segments;
-      const localOffset: Vec3Tuple =
-        i === 0 ? scale3(def.rootOffset, scale) : scale3(def.dir, step);
-      joints.push({
-        name: i === preset.segments ? `${def.name}_tip` : `${def.name}_${i}`,
-        localOffset,
-        hitRadius: preset.hitRadius * scale,
-        stiffness: preset.stiffness * (1 - 0.25 * t),
-        gravityPower: preset.gravityPower,
-        gravityDir: [...GRAVITY_DOWN],
-        dragForce: preset.dragForce,
-      });
-    }
-    return {
-      name: def.name,
-      category: 'hair',
-      parentBone: 'head',
-      colliderGroups: groups,
-      joints,
-    };
-  });
 }
 
 const HEM_DIRECTIONS: ReadonlyArray<{ name: string; azimuth: number; sx: number; sz: number }> = [
@@ -369,16 +236,16 @@ function buildHemChains(
   });
 }
 
-/** Build the complete spring-bone specification (colliders, groups,
- *  hair chains, and flowing-hem chains) for a character + outfit. */
+/** Build the spring-bone specification (leg colliders and flowing-hem
+ *  chains) for a character + outfit. Returns an empty spec when no
+ *  flowing garment hem is worn so zero unskinned bones are emitted. */
 export function buildSpringBoneSpec(input: SpringBoneSpecInput): SpringBoneRigSpec {
+  if (!input.flowingHem) return { colliders: [], colliderGroups: [], chains: [] };
   const scale = clamp(input.height / 1.7, 0.75, 1.35);
   const { colliders, colliderGroups } = buildColliders(input.bones, scale);
   const groupNames = new Set(colliderGroups.map((g) => g.name));
-  const chains: SpringChainSpec[] = [
-    ...buildHairChains(input.hairStyle, input.bones, scale, groupNames),
-    ...(input.flowingHem ? buildHemChains(input.flowingHem, input.bones, scale, groupNames) : []),
-  ];
+  const chains = buildHemChains(input.flowingHem, input.bones, scale, groupNames);
+  if (chains.length === 0) return { colliders: [], colliderGroups: [], chains: [] };
   return { colliders, colliderGroups, chains };
 }
 

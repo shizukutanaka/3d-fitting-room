@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
-import { DEFAULT_CHARACTER, HAIR_STYLES } from '../src/character';
+import { DEFAULT_CHARACTER } from '../src/character';
 import { parseGlb } from '../src/glb';
 import { DEFAULT_OUTFIT, type Outfit } from '../src/outfit';
 import {
@@ -51,49 +51,39 @@ const SAMPLE_BONES: Record<string, Vec3Tuple> = {
 };
 
 describe('VRMC_springBone spec builder', () => {
-  it('builds hair chains for every hair style with valid colliders and joint counts', () => {
-    for (const hairStyle of HAIR_STYLES) {
-      const spec = buildSpringBoneSpec({
-        hairStyle,
-        flowingHem: null,
-        bones: SAMPLE_BONES,
-        height: 1.7,
-      });
-      const hairChains = spec.chains.filter((c) => c.category === 'hair');
-      expect(hairChains.length).toBeGreaterThan(0);
-      for (const c of hairChains) {
-        expect(c.parentBone).toBe('head');
-        expect(c.joints.length).toBeGreaterThanOrEqual(2);
-      }
-      expect(spec.chains.some((c) => c.category === 'hem')).toBe(false);
-      expect(spec.colliders.length).toBeGreaterThan(0);
-    }
+  it('returns an empty spec when no flowing hem is present (no unskinned hair ghost bones)', () => {
+    const spec = buildSpringBoneSpec({
+      flowingHem: null,
+      bones: SAMPLE_BONES,
+      height: 1.7,
+    });
+    expect(spec.chains).toHaveLength(0);
+    expect(spec.colliders).toHaveLength(0);
+    expect(spec.colliderGroups).toHaveLength(0);
   });
 
-  it('adds 4 radial hem chains when a flowing hem is present', () => {
+  it('adds 4 radial hem chains and leg colliders when a flowing hem is present', () => {
     const spec = buildSpringBoneSpec({
-      hairStyle: 'long',
       flowingHem: { topY: 0.92, bottomY: 0.2, radiusX: 0.16, radiusZ: 0.14 },
       bones: SAMPLE_BONES,
       height: 1.7,
     });
-    const hemChains = spec.chains.filter((c) => c.category === 'hem');
-    expect(hemChains.map((c) => c.name)).toEqual(['hemFront', 'hemBack', 'hemLeft', 'hemRight']);
-    for (const c of hemChains) {
+    expect(spec.chains.map((c) => c.name)).toEqual(['hemFront', 'hemBack', 'hemLeft', 'hemRight']);
+    for (const c of spec.chains) {
       expect(c.parentBone).toBe('hips');
       expect(c.joints).toHaveLength(3);
       expect(c.colliderGroups).toContain('legs');
     }
+    expect(spec.colliders.length).toBe(5);
   });
 
   it('reweightHemVertices shifts lower hem vertices to spring joints while keeping weights normalized', () => {
     const spec = buildSpringBoneSpec({
-      hairStyle: 'bob',
       flowingHem: { topY: 0.9, bottomY: 0.3, radiusX: 0.15, radiusZ: 0.14 },
       bones: SAMPLE_BONES,
       height: 1.7,
     });
-    const hemChains = spec.chains.filter((c) => c.category === 'hem');
+    const hemChains = spec.chains;
     const idxMap = new Map<string, number>([['hips', 0]]);
     let next = 1;
     for (const c of hemChains) for (const j of c.joints) idxMap.set(j.name, next++);
@@ -123,8 +113,7 @@ describe('VRMC_springBone spec builder', () => {
 
   it('fails loudly if a referenced bone node is missing', () => {
     const spec = buildSpringBoneSpec({
-      hairStyle: 'bob',
-      flowingHem: null,
+      flowingHem: { topY: 0.92, bottomY: 0.2, radiusX: 0.16, radiusZ: 0.14 },
       bones: SAMPLE_BONES,
       height: 1.7,
     });
@@ -133,13 +122,13 @@ describe('VRMC_springBone spec builder', () => {
 });
 
 describe('VRM export VRMC_springBone integration', { timeout: 60000 }, () => {
-  it('writes VRMC_springBone with hair + hem springs and reweighted skirt mesh', async () => {
+  it('writes VRMC_springBone with hem springs and reweighted skirt mesh', async () => {
     const outfit: Outfit = {
       ...DEFAULT_OUTFIT,
       topStyle: 'tee',
       bottomStyle: 'skirtLong',
       outerStyle: 'none',
-      character: { ...DEFAULT_CHARACTER, hairStyle: 'long' },
+      character: { ...DEFAULT_CHARACTER },
     };
     const { bytes } = await exportVrm(outfit, 'a', 'standard');
     const parsed = parseGlb(bytes)!;
@@ -154,11 +143,7 @@ describe('VRM export VRMC_springBone integration', { timeout: 60000 }, () => {
     expect(sb.colliderGroups.length).toBeGreaterThan(0);
 
     const springNames: string[] = sb.springs.map((s: any) => s.name);
-    expect(springNames).toContain('hairBack');
-    expect(springNames).toContain('hemFront');
-    expect(springNames).toContain('hemBack');
-    expect(springNames).toContain('hemLeft');
-    expect(springNames).toContain('hemRight');
+    expect(springNames).toEqual(['hemFront', 'hemBack', 'hemLeft', 'hemRight']);
 
     // Every spring joint node must exist in skin.joints and form a parent-child chain.
     const skinJointSet = new Set<number>(json.skins[0].joints);
@@ -198,7 +183,7 @@ describe('VRM export VRMC_springBone integration', { timeout: 60000 }, () => {
     expect(weightedToHem).toBeGreaterThan(0);
   });
 
-  it('omits hem springs when wearing non-flowing bottoms and omits VRMC_springBone in plain GLB', async () => {
+  it('omits VRMC_springBone when wearing non-flowing bottoms and in plain GLB', async () => {
     const outfit: Outfit = {
       ...DEFAULT_OUTFIT,
       topStyle: 'tee',
@@ -206,9 +191,10 @@ describe('VRM export VRMC_springBone integration', { timeout: 60000 }, () => {
       outerStyle: 'none',
     };
     const vrm = parseGlb((await exportVrm(outfit, 'a', 'standard')).bytes)!.json as any;
-    const names: string[] = vrm.extensions.VRMC_springBone.springs.map((s: any) => s.name);
-    expect(names.some((n) => n.startsWith('hair'))).toBe(true);
-    expect(names.some((n) => n.startsWith('hem'))).toBe(false);
+    expect(vrm.extensionsUsed).toContain('VRMC_vrm');
+    expect(vrm.extensionsUsed).not.toContain('VRMC_springBone');
+    expect(vrm.extensions?.VRMC_springBone).toBeUndefined();
+    expect(vrm.skins[0].joints).toHaveLength(22);
 
     const glb = parseGlb((await exportGlb(outfit, 'a', 'standard')).bytes)!.json as any;
     expect(glb.extensions?.VRMC_springBone).toBeUndefined();
