@@ -10,7 +10,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Reflector } from 'three/addons/objects/Reflector.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { fabricTextures, plasterTexture, woodFloorTexture } from './textures';
+import { blobShadowTexture, fabricTextures, plasterTexture, woodFloorTexture } from './textures';
 import { NO_MIRROR_LAYER, XR_QUALITY_STEPS, XR_VIEWPORT_SCALE_MIN, nextXrQualityLevelAfterScale, nextXrViewportScale, xrStartLevel } from './vr';
 import { MotionGate } from './shadowgate';
 
@@ -76,6 +76,19 @@ export const MIRROR_FLAT_PX = 1024;
 export const MIRROR_XR_PX = 512;
 /** Shadow map edge on the flat screen (XR steps: vr.ts). */
 export const SHADOW_FLAT_PX = 2048;
+
+/** Contact / blob shadow under the character on top of the podium
+ *  (backlog #18): keeps the feet grounded cheaply alongside the
+ *  directional shadow map and stays on even when the XR quality
+ *  ladder disables real-time shadows. */
+export const BLOB_SHADOW_Y = 0.1215;
+export const BLOB_SHADOW_RADIUS = 0.42;
+export const BLOB_SHADOW_OPACITY_WITH_SHADOWS = 0.34;
+export const BLOB_SHADOW_OPACITY_ONLY = 0.5;
+
+export function blobShadowOpacity(shadowsEnabled: boolean): number {
+  return shadowsEnabled ? BLOB_SHADOW_OPACITY_WITH_SHADOWS : BLOB_SHADOW_OPACITY_ONLY;
+}
 
 /** Fixed dynamic-light budget (backlog #8): 1 shadow-casting key
  *  light + 1 fill light. Room lighting lives in emissive meshes and
@@ -475,6 +488,25 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
   podium.position.y = 0.06;
   podium.receiveShadow = true;
   scene.add(podium);
+  const blobShadowMat = new THREE.MeshBasicMaterial({
+    map: blobShadowTexture(),
+    transparent: true,
+    opacity: blobShadowOpacity(true),
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+  });
+  const blobShadow = new THREE.Mesh(
+    new THREE.PlaneGeometry(BLOB_SHADOW_RADIUS * 2, BLOB_SHADOW_RADIUS * 2),
+    blobShadowMat,
+  );
+  blobShadow.name = 'blob-shadow';
+  blobShadow.rotation.x = -Math.PI / 2;
+  blobShadow.position.set(0, BLOB_SHADOW_Y, 0);
+  blobShadow.scale.set(1.0, 0.78, 1.0);
+  blobShadow.renderOrder = 1;
+  scene.add(blobShadow);
   const inlay = mesh(new THREE.TorusGeometry(1.0, 0.007, 8, 72), brass, 0, 0.118, 0);
   inlay.rotation.x = Math.PI / 2;
   brassParts.push(inlay);
@@ -734,6 +766,7 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
       setMirrorResolution(step.mirrorPx);
     }
     key.castShadow = step.shadows;
+    blobShadowMat.opacity = blobShadowOpacity(step.shadows);
     setShadowQuality(step.shadowPx, step.shadowSoft);
     try {
       renderer.xr.setFoveation(step.foveation);
@@ -780,6 +813,7 @@ export function createStage(canvas: HTMLCanvasElement): Stage {
     resetFrameSampling();
     mirror.visible = true;
     key.castShadow = true;
+    blobShadowMat.opacity = blobShadowOpacity(true);
     setShadowQuality(SHADOW_FLAT_PX, true);
     setMirrorResolution(MIRROR_FLAT_PX);
     try {
