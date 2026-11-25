@@ -952,19 +952,24 @@ interface LoadedFigure {
 /** Own a flowing garment's skinning attributes (keeping shared
  *  positions/normals/UVs/morphs intact) so hem spring reweighting
  *  does not mutate the cached asset geometry. */
-function ownSkinning(m: THREE.SkinnedMesh): { skinJoints: Uint8Array; skinWeights: Float32Array } {
-  const src = m.geometry;
+/** Shallow-clone a BufferGeometry shell sharing all attributes/index/morphs
+ *  with the source so callers can replace individual attributes per rig. */
+function cloneGeometryShell(src: THREE.BufferGeometry): THREE.BufferGeometry {
   const geo = new THREE.BufferGeometry();
-  for (const [name, attr] of Object.entries(src.attributes)) {
-    if (name === 'skinIndex' || name === 'skinWeight') continue;
-    geo.setAttribute(name, attr);
-  }
+  for (const [name, attr] of Object.entries(src.attributes)) geo.setAttribute(name, attr);
   if (src.index) geo.setIndex(src.index);
-  geo.morphAttributes = src.morphAttributes;
-  geo.morphTargetsRelative = src.morphTargetsRelative;
+  if (src.morphAttributes && Object.keys(src.morphAttributes).length > 0) {
+    geo.morphAttributes = src.morphAttributes;
+    geo.morphTargetsRelative = src.morphTargetsRelative;
+  }
   geo.boundingBox = src.boundingBox;
   geo.boundingSphere = src.boundingSphere;
+  return geo;
+}
 
+function ownSkinning(m: THREE.SkinnedMesh): { skinJoints: Uint8Array; skinWeights: Float32Array } {
+  const src = m.geometry;
+  const geo = cloneGeometryShell(src);
   const si = src.getAttribute('skinIndex');
   const sw = src.getAttribute('skinWeight');
   const count = src.getAttribute('position').count;
@@ -1079,10 +1084,8 @@ function attachSprings(
 function ownIndex(m: THREE.SkinnedMesh): ArrayLike<number> | null {
   const src = m.geometry;
   if (!src.index) return null;
-  const geo = new THREE.BufferGeometry();
-  for (const [name, attr] of Object.entries(src.attributes)) geo.setAttribute(name, attr);
+  const geo = cloneGeometryShell(src);
   geo.setIndex(src.index.clone());
-  geo.boundingSphere = src.boundingSphere;
   m.geometry = geo;
   return src.index.array;
 }
