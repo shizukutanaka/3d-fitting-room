@@ -383,10 +383,14 @@ describe('wardrobe on the skinned mannequin (GLB garments, bone calibration)', {
     expect(sanitizeOutfit({ outerColor: '#123456' }).outerColor).toBe(DEFAULT_OUTFIT.outerColor);
   });
 
-  it('switching figures disposes the replaced figure materials without breaking switching back', async () => {
+  it('switching figures disposes the replaced figure materials and owned garment geometries without breaking switching back', async () => {
     const { rig } = await dressed(DEFAULT_OUTFIT);
     const disposedMats = new Set<THREE.Material>();
+    const disposedGeos = new Set<THREE.BufferGeometry>();
     const mats: THREE.Material[] = [];
+    const ownedGarmentGeos: THREE.BufferGeometry[] = [];
+    const sharedShoeGeos: THREE.BufferGeometry[] = [];
+    const shoeIds = new Set(['boots', 'sneakers', 'shoesLow']);
     rig.root.traverse((o) => {
       if (!(o instanceof THREE.SkinnedMesh)) return;
       const m = o.material as THREE.Material;
@@ -398,10 +402,26 @@ describe('wardrobe on the skinned mannequin (GLB garments, bone calibration)', {
           orig();
         };
       }
+      if (o.name.startsWith('G_') || o.parent?.name.startsWith('G_')) {
+        const id = (o.name.startsWith('G_') ? o.name : o.parent!.name).slice(2);
+        const target = shoeIds.has(id) ? sharedShoeGeos : ownedGarmentGeos;
+        if (!target.includes(o.geometry)) {
+          target.push(o.geometry);
+          const origGeo = o.geometry.dispose.bind(o.geometry);
+          o.geometry.dispose = () => {
+            disposedGeos.add(o.geometry);
+            origGeo();
+          };
+        }
+      }
     });
     expect(mats.length).toBeGreaterThan(10);
+    expect(ownedGarmentGeos.length).toBeGreaterThan(10);
+    expect(sharedShoeGeos.length).toBe(3);
     await rig.setBody('b', 'standard');
     expect(disposedMats.size).toBe(mats.length);
+    for (const g of ownedGarmentGeos) expect(disposedGeos.has(g)).toBe(true);
+    for (const g of sharedShoeGeos) expect(disposedGeos.has(g)).toBe(false);
     await rig.setBody('a', 'standard');
     expect(rig.figure()).toBe('a');
   });
