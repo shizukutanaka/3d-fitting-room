@@ -152,6 +152,30 @@ describe('wardrobe on the skinned mannequin (GLB garments, bone calibration)', {
     }
   });
 
+  it('garments carry a wrinkle and hem normal map without gaining triangles; footwear and the base layer have none', async () => {
+    const { rig } = await dressed({ ...DEFAULT_OUTFIT, topStyle: 'tee', outerStyle: 'jacket' });
+    const glb = readFileSync('public/models/mannequin-a.glb');
+    const jsonLen = glb.readUInt32LE(12);
+    const gltf = JSON.parse(glb.subarray(20, 20 + jsonLen).toString());
+    let seen = 0;
+    rig.root.traverse((obj) => {
+      if (!(obj instanceof THREE.SkinnedMesh) || !obj.name.startsWith('G_')) return;
+      const id = obj.name.slice(2);
+      const mat = obj.material as THREE.MeshPhysicalMaterial;
+      const plain = id === 'base' || id === 'boots' || id === 'sneakers' || id === 'shoesLow';
+      expect(mat.normalMap === null, id).toBe(plain);
+      expect(mat.bumpMap, id).not.toBeNull();
+      const node = gltf.nodes.find((n: { name: string }) => n.name === obj.name);
+      const source = gltf.meshes[node.mesh].primitives.reduce(
+        (sum: number, p: { indices: number }) => sum + gltf.accessors[p.indices].count,
+        0,
+      );
+      expect(obj.geometry.getIndex()!.count, id).toBe(source);
+      seen++;
+    });
+    expect(seen).toBeGreaterThan(10);
+  });
+
   it('every bottom shows (dresses suppress them all)', async () => {
     for (const bottomStyle of BOTTOM_STYLES) {
       if (bottomStyle === 'none') continue;

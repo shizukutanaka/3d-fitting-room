@@ -246,3 +246,112 @@ export function ribbedBump(repeat: [number, number] = [10, 1]): THREE.Texture {
     { repeat },
   );
 }
+
+// ---- garment wrinkle and hem normals ----
+// A garment's static detail that the weave bump cannot carry: worn-in
+// wrinkles and the raised, turned hem along its open edges. Computed
+// as a height field in plain arrays (no canvas, so it also runs under
+// node) and stored as a tangent-space normal map, one texel per
+// GARMENT_NORMAL_TEXEL_M of cloth.
+
+/** Edge length of a garment normal map (px). Every wardrobe item has
+ *  its own and all are uploaded at warm-up, so this stays small. */
+export const GARMENT_NORMAL_SIZE = 256;
+/** Cloth covered by one texel: the garments' UVs run about 1.5 m per
+ *  unit. */
+export const GARMENT_NORMAL_TEXEL_M = 1.5 / GARMENT_NORMAL_SIZE;
+const WRINKLE_COUNT = 70;
+const WRINKLE_HEIGHT_M = 0.005;
+const HEM_HEIGHT_M = 0.003;
+const HEM_HALF_WIDTH_PX = 2.2;
+
+/** RGBA tangent-space normals (OpenGL convention, row 0 at v = 0)
+ *  for one garment. `hemEdges` are its open edges in UV space, four
+ *  numbers (u0, v0, u1, v1) per edge; UVs outside 0..1 wrap. The map
+ *  tiles, and the same seed always gives the same map. */
+export function garmentNormalData(hemEdges: ArrayLike<number>, seed: number, size = GARMENT_NORMAL_SIZE): Uint8Array<ArrayBuffer> {
+  const h = new Float32Array(size * size);
+  const wrap = (i: number) => ((i % size) + size) % size;
+  const rand = rng(seed);
+  // Wrinkles: long, narrow ridges and valleys in loose clusters, so
+  // some areas stay smooth.
+  let cx = 0;
+  let cy = 0;
+  for (let n = 0; n < WRINKLE_COUNT; n++) {
+    if (n % 5 === 0) {
+      cx = rand() * size;
+      cy = rand() * size;
+    }
+    const x0 = cx + (rand() - 0.5) * size * 0.22;
+    const y0 = cy + (rand() - 0.5) * size * 0.22;
+    const angle = rand() * Math.PI;
+    const dx = Math.cos(angle);
+    const dy = Math.sin(angle);
+    const half = 8 + rand() * 16;
+    const width = 1.6 + rand() * 1.8;
+    const amp = WRINKLE_HEIGHT_M * (0.4 + rand() * 0.6) * (rand() < 0.5 ? -1 : 1);
+    const reach = Math.ceil(half + width * 3);
+    for (let j = -reach; j <= reach; j++) {
+      for (let i = -reach; i <= reach; i++) {
+        const along = i * dx + j * dy;
+        const across = -i * dy + j * dx;
+        const a = Math.abs(along) / half;
+        if (a >= 1) continue;
+        const taper = (1 - a * a) * (1 - a * a);
+        h[wrap(Math.round(y0) + j) * size + wrap(Math.round(x0) + i)] += amp * taper * Math.exp(-(across * across) / (2 * width * width));
+      }
+    }
+  }
+  // Hems: a rounded ridge along every open edge.
+  const hem = new Float32Array(size * size);
+  const r = HEM_HALF_WIDTH_PX;
+  for (let e = 0; e + 3 < hemEdges.length; e += 4) {
+    const ax = hemEdges[e] * size;
+    const ay = hemEdges[e + 1] * size;
+    const bx = hemEdges[e + 2] * size;
+    const by = hemEdges[e + 3] * size;
+    const ex = bx - ax;
+    const ey = by - ay;
+    const len2 = ex * ex + ey * ey || 1;
+    for (let y = Math.floor(Math.min(ay, by) - r); y <= Math.ceil(Math.max(ay, by) + r); y++) {
+      for (let x = Math.floor(Math.min(ax, bx) - r); x <= Math.ceil(Math.max(ax, bx) + r); x++) {
+        const t = Math.min(Math.max(((x - ax) * ex + (y - ay) * ey) / len2, 0), 1);
+        const d = Math.hypot(x - ax - t * ex, y - ay - t * ey) / r;
+        if (d >= 1) continue;
+        const k = wrap(y) * size + wrap(x);
+        hem[k] = Math.max(hem[k], HEM_HEIGHT_M * (1 - d * d));
+      }
+    }
+  }
+  const height = (x: number, y: number) => {
+    const k = wrap(y) * size + wrap(x);
+    return h[k] + hem[k];
+  };
+  const texel = GARMENT_NORMAL_TEXEL_M * (GARMENT_NORMAL_SIZE / size);
+  const out = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const nx = -(height(x + 1, y) - height(x - 1, y)) / (2 * texel);
+      const ny = -(height(x, y + 1) - height(x, y - 1)) / (2 * texel);
+      const inv = 1 / Math.hypot(nx, ny, 1);
+      const o = (y * size + x) * 4;
+      out[o] = Math.round((nx * inv * 0.5 + 0.5) * 255);
+      out[o + 1] = Math.round((ny * inv * 0.5 + 0.5) * 255);
+      out[o + 2] = Math.round((inv * 0.5 + 0.5) * 255);
+      out[o + 3] = 255;
+    }
+  }
+  return out;
+}
+
+/** garmentNormalData as a repeating, mipmapped texture. */
+export function garmentNormalTexture(hemEdges: ArrayLike<number>, seed: number): THREE.DataTexture {
+  const tex = new THREE.DataTexture(garmentNormalData(hemEdges, seed), GARMENT_NORMAL_SIZE, GARMENT_NORMAL_SIZE, THREE.RGBAFormat);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.anisotropy = 4;
+  tex.needsUpdate = true;
+  return tex;
+}
