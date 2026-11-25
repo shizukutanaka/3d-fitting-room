@@ -119,7 +119,9 @@ export function skinTextures(): MapBump {
   };
 }
 
-/** Hair strands: vertical streaks used as bump (and faint map). */
+/** Hair strands: vertical streaks used as bump (and faint map).
+ *  Design rule: hair materials use alphaTest cutout (`createHairMaterial` /
+ *  `applyHairCutoutRule` in avatar.ts), never transparent blending. */
 export function hairTextures(): MapBump {
   const draw = (base: string, amp: number) => (ctx: CanvasRenderingContext2D, size: number) => {
     ctx.fillStyle = base;

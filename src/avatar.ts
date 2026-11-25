@@ -293,6 +293,55 @@ function garmentMaterialBase(
 
 const MANNEQUIN_BASE = new THREE.Color('#e7e1d7');
 
+// ---- hair material design rule (backlog #17) ----
+// All hair materials MUST render as alpha-tested cutout (`alphaTest`,
+// glTF `alphaMode: "MASK"`), NEVER transparent alpha blending
+// (`transparent: true` / glTF `"BLEND"`). Layered hair cards with
+// alpha blending cause severe overdraw and sort-order artefacts on
+// mobile/standalone XR GPUs (Quest). Always construct hair materials
+// through `createHairMaterial` or normalize imported ones through
+// `applyHairCutoutRule`.
+export const HAIR_ALPHA_TEST = 0.5;
+
+/** Enforce cutout (alphaTest) rendering on a hair material: disables
+ *  alpha blending, writes depth, and sets the standard alphaTest
+ *  cutoff so overlapping hair layers avoid transparency overdraw. */
+export function applyHairCutoutRule<T extends THREE.Material>(material: T): T {
+  material.transparent = false;
+  material.alphaTest = HAIR_ALPHA_TEST;
+  material.depthWrite = true;
+  material.side = THREE.DoubleSide;
+  material.needsUpdate = true;
+  return material;
+}
+
+/** Build a standard cutout hair material following the alphaTest
+ *  design rule (no transparent blending). */
+export function createHairMaterial(
+  color: THREE.ColorRepresentation,
+  maps?: { map?: THREE.Texture | null; bump?: THREE.Texture | null; alphaMap?: THREE.Texture | null },
+): THREE.MeshPhysicalMaterial {
+  const mat = new THREE.MeshPhysicalMaterial({
+    name: 'hair',
+    color,
+    map: maps?.map ?? null,
+    bumpMap: maps?.bump ?? null,
+    bumpScale: maps?.bump ? 0.015 : 0,
+    alphaMap: maps?.alphaMap ?? null,
+    roughness: 0.55,
+    metalness: 0,
+    sheen: 0.35,
+    sheenRoughness: 0.5,
+    sheenColor: new THREE.Color('#ffffff'),
+    envMapIntensity: 0.55,
+  });
+  return applyHairCutoutRule(mat);
+}
+
+function isHairMesh(obj: THREE.Object3D, matName: string): boolean {
+  return obj.name.startsWith('H_') || !!obj.parent?.name.startsWith('H_') || /hair/i.test(matName);
+}
+
 // ---- skin wrap lighting ----
 // A cheap stand-in for subsurface scattering, on the body material
 // only: direct diffuse light wraps past the terminator instead of
@@ -1117,6 +1166,12 @@ export function buildAvatar(
         garments.set(id, m);
         m.visible = id === 'base';
         if (id === 'base') mask(m, 'base');
+      } else if (isHairMesh(o, matName)) {
+        if (Array.isArray(m.material)) {
+          for (const mat of m.material) applyHairCutoutRule(mat);
+        } else {
+          applyHairCutoutRule(m.material);
+        }
       } else {
         if (matName === 'mannequin') mask(m, 'body');
         m.material = body;

@@ -161,12 +161,18 @@ async function snapshotOutfit(outfit: Outfit, figure: FigureId, leg: LegRatio): 
     if (known !== undefined) return known;
     const std = mat as THREE.MeshStandardMaterial;
     const color = std.color;
+    const alphaMode: GlbMaterialDef['alphaMode'] = std.transparent
+      ? 'BLEND'
+      : std.alphaTest > 0
+        ? 'MASK'
+        : 'OPAQUE';
     materials.push({
       name: mat.name || `material-${materials.length}`,
       baseColorFactor: color ? [color.r, color.g, color.b, std.opacity ?? 1] : [1, 1, 1, std.opacity ?? 1],
       roughnessFactor: std.roughness ?? 1,
       metallicFactor: std.metalness ?? 0,
-      alphaMode: std.transparent ? 'BLEND' : 'OPAQUE',
+      alphaMode,
+      ...(alphaMode === 'MASK' ? { alphaCutoff: std.alphaTest } : {}),
       doubleSided: std.side === THREE.DoubleSide,
     });
     materialIndex.set(mat, materials.length - 1);

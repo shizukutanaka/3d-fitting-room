@@ -25,7 +25,8 @@ export interface GlbMaterialDef {
   baseColorFactor: [number, number, number, number];
   roughnessFactor: number;
   metallicFactor: number;
-  alphaMode?: 'OPAQUE' | 'BLEND';
+  alphaMode?: 'OPAQUE' | 'MASK' | 'BLEND';
+  alphaCutoff?: number;
   doubleSided?: boolean;
 }
 
@@ -321,6 +322,7 @@ export function buildGlb(
         },
       };
       if (m.alphaMode && m.alphaMode !== 'OPAQUE') mat.alphaMode = m.alphaMode;
+      if (m.alphaMode === 'MASK' && m.alphaCutoff !== undefined) mat.alphaCutoff = m.alphaCutoff;
       if (m.doubleSided) mat.doubleSided = true;
       return mat;
     }),
