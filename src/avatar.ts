@@ -987,7 +987,6 @@ function attachSprings(
   bones: Map<string, THREE.Bone>,
   garments: Map<string, THREE.SkinnedMesh>,
   height: number,
-  hairStyle: CharacterParams['hairStyle'],
 ): SpringBoneRuntime | undefined {
   group.updateMatrixWorld(true);
   const bonesMap: Record<string, Vec3Tuple> = {};
@@ -1027,7 +1026,6 @@ function attachSprings(
   }
 
   const spec = buildSpringBoneSpec({
-    hairStyle,
     flowingHem,
     bones: bonesMap,
     height,
@@ -1315,7 +1313,7 @@ export function buildAvatar(
       garments,
       materials,
       masked,
-      springs: maskBody ? attachSprings(group, bones, garments, height, character.hairStyle) : undefined,
+      springs: maskBody ? attachSprings(group, bones, garments, height) : undefined,
     };
     (loaded as LoadedFigure & { eyeBox: THREE.Box3 | null; box: THREE.Box3 }).eyeBox = eyeBox;
     (loaded as LoadedFigure & { box: THREE.Box3 }).box = box;
