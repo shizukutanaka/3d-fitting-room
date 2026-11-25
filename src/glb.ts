@@ -27,6 +27,12 @@ export interface GlbMaterialDef {
   metallicFactor: number;
   alphaMode?: 'OPAQUE' | 'BLEND';
   doubleSided?: boolean;
+  /** Optional KHR_materials_sheen parameters (linear-sRGB colorFactor
+   *  pre-multiplied by sheen weight, plus roughnessFactor in [0, 1]). */
+  sheen?: {
+    colorFactor: [number, number, number];
+    roughnessFactor: number;
+  };
 }
 
 export interface GlbPartDef {
@@ -305,6 +311,12 @@ export function buildGlb(
   const rootNode = nodes.length;
   nodes.push({ name: 'character', children: rootChildren });
 
+  const hasSheen = materials.some((m) => m.sheen !== undefined);
+  const extensionsUsed = [...(opts.extensionsUsed ?? [])];
+  if (hasSheen && !extensionsUsed.includes('KHR_materials_sheen')) {
+    extensionsUsed.push('KHR_materials_sheen');
+  }
+
   const json: Record<string, unknown> = {
     asset: { version: '2.0', generator: opts.generator },
     scene: 0,
@@ -322,6 +334,14 @@ export function buildGlb(
       };
       if (m.alphaMode && m.alphaMode !== 'OPAQUE') mat.alphaMode = m.alphaMode;
       if (m.doubleSided) mat.doubleSided = true;
+      if (m.sheen) {
+        mat.extensions = {
+          KHR_materials_sheen: {
+            sheenColorFactor: [...m.sheen.colorFactor],
+            sheenRoughnessFactor: m.sheen.roughnessFactor,
+          },
+        };
+      }
       return mat;
     }),
     accessors,
@@ -330,7 +350,7 @@ export function buildGlb(
   };
   if (skinDef) json.skins = [skinDef];
   if (opts.extensions) json.extensions = opts.extensions;
-  if (opts.extensionsUsed) json.extensionsUsed = opts.extensionsUsed;
+  if (extensionsUsed.length > 0) json.extensionsUsed = extensionsUsed;
   if (opts.extras) json.extras = opts.extras;
 
   const jsonBytes = new TextEncoder().encode(JSON.stringify(json));
