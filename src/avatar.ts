@@ -30,7 +30,7 @@ import {
 } from './bodyscale';
 import { skinColorForTone, type CharacterParams } from './character';
 import { isDress, type BottomStyle, type OuterStyle, type PoseId, type ShoeStyle, type TopStyle } from './outfit';
-import { fabricTextures, leatherTextures, ribbedBump } from './textures';
+import { fabricTextures, garmentNormalTexture, leatherTextures, ribbedBump } from './textures';
 
 export type FigureId = 'a' | 'b';
 export const FIGURES: readonly FigureId[] = ['a', 'b'];
@@ -139,21 +139,24 @@ interface FabricSpec {
   bump: number;
   kind?: 'knit' | 'leather';
   clearcoat?: number;
+  /** Strength of the wrinkle and hem normal map (normalScale);
+   *  absent = the item has none (footwear). */
+  crease?: number;
 }
 
 const FABRIC: Record<string, FabricSpec> = {
-  tee: { roughness: 0.88, sheen: 0.35, sheenRoughness: 0.8, repeat: 14, bump: 0.25 },
-  hoodie: { roughness: 0.95, sheen: 0.65, sheenRoughness: 0.9, repeat: 10, bump: 0.35 },
-  blouse: { roughness: 0.42, sheen: 0.45, sheenRoughness: 0.35, repeat: 18, bump: 0.12 },
-  dress: { roughness: 0.62, sheen: 0.4, sheenRoughness: 0.5, repeat: 16, bump: 0.15 },
-  dressLong: { roughness: 0.55, sheen: 0.45, sheenRoughness: 0.45, repeat: 16, bump: 0.15 },
-  jacket: { roughness: 0.78, sheen: 0.45, sheenRoughness: 0.7, repeat: 12, bump: 0.3 },
-  coat: { roughness: 0.86, sheen: 0.6, sheenRoughness: 0.8, repeat: 10, bump: 0.35 },
-  cardigan: { roughness: 0.96, sheen: 0.7, sheenRoughness: 0.9, repeat: 1, bump: 0.6, kind: 'knit' },
-  pants: { roughness: 0.84, sheen: 0.25, sheenRoughness: 0.8, repeat: 14, bump: 0.35 },
-  shorts: { roughness: 0.84, sheen: 0.25, sheenRoughness: 0.8, repeat: 14, bump: 0.35 },
-  skirt: { roughness: 0.7, sheen: 0.4, sheenRoughness: 0.6, repeat: 6, bump: 0.2 },
-  skirtLong: { roughness: 0.6, sheen: 0.45, sheenRoughness: 0.5, repeat: 6, bump: 0.15 },
+  tee: { roughness: 0.88, sheen: 0.35, sheenRoughness: 0.8, repeat: 14, bump: 0.25, crease: 0.8 },
+  hoodie: { roughness: 0.95, sheen: 0.65, sheenRoughness: 0.9, repeat: 10, bump: 0.35, crease: 0.9 },
+  blouse: { roughness: 0.42, sheen: 0.45, sheenRoughness: 0.35, repeat: 18, bump: 0.12, crease: 1.0 },
+  dress: { roughness: 0.62, sheen: 0.4, sheenRoughness: 0.5, repeat: 16, bump: 0.15, crease: 0.9 },
+  dressLong: { roughness: 0.55, sheen: 0.45, sheenRoughness: 0.45, repeat: 16, bump: 0.15, crease: 0.9 },
+  jacket: { roughness: 0.78, sheen: 0.45, sheenRoughness: 0.7, repeat: 12, bump: 0.3, crease: 0.6 },
+  coat: { roughness: 0.86, sheen: 0.6, sheenRoughness: 0.8, repeat: 10, bump: 0.35, crease: 0.6 },
+  cardigan: { roughness: 0.96, sheen: 0.7, sheenRoughness: 0.9, repeat: 1, bump: 0.6, kind: 'knit', crease: 0.8 },
+  pants: { roughness: 0.84, sheen: 0.25, sheenRoughness: 0.8, repeat: 14, bump: 0.35, crease: 0.8 },
+  shorts: { roughness: 0.84, sheen: 0.25, sheenRoughness: 0.8, repeat: 14, bump: 0.35, crease: 0.7 },
+  skirt: { roughness: 0.7, sheen: 0.4, sheenRoughness: 0.6, repeat: 6, bump: 0.2, crease: 0.8 },
+  skirtLong: { roughness: 0.6, sheen: 0.45, sheenRoughness: 0.5, repeat: 6, bump: 0.15, crease: 0.9 },
   shoesLow: { roughness: 0.42, sheen: 0, sheenRoughness: 0.5, repeat: 4, bump: 0.25, kind: 'leather', clearcoat: 0.35 },
   sneakers: { roughness: 0.7, sheen: 0.2, sheenRoughness: 0.7, repeat: 8, bump: 0.3 },
   boots: { roughness: 0.4, sheen: 0, sheenRoughness: 0.5, repeat: 4, bump: 0.3, kind: 'leather', clearcoat: 0.4 },
@@ -177,9 +180,99 @@ function fabricMaps(spec: FabricSpec): { map?: THREE.Texture; bump: THREE.Textur
   return t;
 }
 
-function garmentMaterial(name: string): THREE.MeshPhysicalMaterial {
+/** A garment's open edges (hems, cuffs, neckline, front opening) in
+ *  UV space, four numbers per edge. Vertices are welded by position
+ *  first, so a UV or normal seam does not count as an edge. */
+export function openEdgeUvs(geometry: THREE.BufferGeometry): number[] {
+  const pos = geometry.getAttribute('position');
+  const uv = geometry.getAttribute('uv');
+  const index = geometry.getIndex();
+  if (!uv || !index) return [];
+  const welded = new Map<string, number>();
+  const id = (i: number) => {
+    const key = `${Math.round(pos.getX(i) * 1e5)},${Math.round(pos.getY(i) * 1e5)},${Math.round(pos.getZ(i) * 1e5)}`;
+    let w = welded.get(key);
+    if (w === undefined) welded.set(key, (w = welded.size));
+    return w;
+  };
+  const edges = new Map<string, { a: number; b: number; uses: number }>();
+  for (let t = 0; t < index.count; t += 3) {
+    for (let k = 0; k < 3; k++) {
+      const a = index.getX(t + k);
+      const b = index.getX(t + ((k + 1) % 3));
+      const wa = id(a);
+      const wb = id(b);
+      if (wa === wb) continue;
+      const key = wa < wb ? `${wa}_${wb}` : `${wb}_${wa}`;
+      const edge = edges.get(key);
+      if (edge) edge.uses += 1;
+      else edges.set(key, { a, b, uses: 1 });
+    }
+  }
+  const out: number[] = [];
+  for (const { a, b, uses } of edges.values()) {
+    if (uses === 1) out.push(uv.getX(a), uv.getY(a), uv.getX(b), uv.getY(b));
+  }
+  return out;
+}
+
+// One wrinkle-and-hem normal map per garment geometry; rigs (and the
+// export rig) share it.
+const creaseCache = new Map<string, THREE.Texture>();
+function creaseNormalMap(id: string, geometry: THREE.BufferGeometry): THREE.Texture {
+  let tex = creaseCache.get(geometry.uuid);
+  if (!tex) {
+    let seed = 7;
+    for (let i = 0; i < id.length; i++) seed = (seed * 31 + id.charCodeAt(i)) >>> 0;
+    // A garment whose UVs span more than one tile (long skirts, the
+    // open-front shells) is squeezed into one, so a hem cannot wrap
+    // round and show up across the middle of the cloth.
+    const uv = geometry.getAttribute('uv');
+    const box = new THREE.Box2();
+    for (let i = 0; i < uv.count; i++) box.expandByPoint(new THREE.Vector2(uv.getX(i), uv.getY(i)));
+    const repeat = new THREE.Vector2(1 / Math.max(1, box.max.x - box.min.x), 1 / Math.max(1, box.max.y - box.min.y));
+    const offset = new THREE.Vector2(repeat.x < 1 ? -box.min.x * repeat.x : 0, repeat.y < 1 ? -box.min.y * repeat.y : 0);
+    const edges = openEdgeUvs(geometry).map((x, i) => (i % 2 === 0 ? x * repeat.x + offset.x : x * repeat.y + offset.y));
+    tex = garmentNormalTexture(edges, seed);
+    tex.repeat.copy(repeat);
+    tex.offset.copy(offset);
+    creaseCache.set(geometry.uuid, tex);
+  }
+  return tex;
+}
+
+/** three.js reads either a normal map or a bump map, never both.
+ *  Garments need both: the weave stays on the tiled bump map and the
+ *  wrinkles and hems come from the normal map, so the bump is applied
+ *  on top of the mapped normal. Throws if the chunk changed shape. */
+const BUMP_BRANCH = '#elif defined( USE_BUMPMAP )';
+export function creaseNormalChunk(): string {
+  const chunk = THREE.ShaderChunk.normal_fragment_maps;
+  if (chunk.split(BUMP_BRANCH).length !== 2) throw new Error('crease normals: bump branch not found');
+  return chunk.replace(BUMP_BRANCH, '#endif\n#if defined( USE_BUMPMAP )');
+}
+
+function garmentMaterial(name: string, geometry?: THREE.BufferGeometry): THREE.MeshPhysicalMaterial {
   const spec = FABRIC[name] ?? FABRIC.tee;
   const maps = fabricMaps(spec);
+  const mat = garmentMaterialBase(name, spec, maps);
+  if (spec.crease && geometry) {
+    mat.normalMap = creaseNormalMap(name, geometry);
+    mat.normalScale.setScalar(spec.crease);
+    const chunk = creaseNormalChunk();
+    mat.onBeforeCompile = (shader) => {
+      shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_maps>', chunk);
+    };
+    mat.customProgramCacheKey = () => 'crease-normals';
+  }
+  return mat;
+}
+
+function garmentMaterialBase(
+  name: string,
+  spec: FabricSpec,
+  maps: { map?: THREE.Texture; bump: THREE.Texture },
+): THREE.MeshPhysicalMaterial {
   return new THREE.MeshPhysicalMaterial({
     name,
     color: '#ffffff',
@@ -199,6 +292,44 @@ function garmentMaterial(name: string): THREE.MeshPhysicalMaterial {
 }
 
 const MANNEQUIN_BASE = new THREE.Color('#e7e1d7');
+
+// ---- skin wrap lighting ----
+// A cheap stand-in for subsurface scattering, on the body material
+// only: direct diffuse light wraps past the terminator instead of
+// cutting off at 90 degrees, and the band where the light grazes the
+// surface takes a reddish tint. Specular, clearcoat and indirect
+// light are untouched. No extra texture, pass or uniform.
+/** How far past the terminator the diffuse term reaches (0 = Lambert). */
+export const SKIN_WRAP = 0.25;
+/** Linear tint at the centre of the grazing band. */
+export const SKIN_SCATTER_TINT = new THREE.Color(1, 0.42, 0.32);
+const SKIN_DIFFUSE_LINE = 'reflectedLight.directDiffuse += irradiance * BRDF_Lambert( material.diffuseColor );';
+
+/** The physical lighting chunk with the direct diffuse line swapped
+ *  for the wrapped one. Throws if three.js no longer has that line,
+ *  so an upgrade cannot silently drop the effect. */
+export function skinWrapLightingChunk(): string {
+  const chunk = THREE.ShaderChunk.lights_physical_pars_fragment;
+  if (chunk.split(SKIN_DIFFUSE_LINE).length !== 2) throw new Error('skin wrap: direct diffuse line not found');
+  const t = SKIN_SCATTER_TINT;
+  return chunk.replace(
+    SKIN_DIFFUSE_LINE,
+    `float skinNL = dot( geometryNormal, directLight.direction );
+	float skinWrap = saturate( ( skinNL + ${SKIN_WRAP.toFixed(3)} ) / ${(1 + SKIN_WRAP).toFixed(3)} );
+	float skinGraze = smoothstep( 0.0, 0.5, skinWrap ) * ( 1.0 - smoothstep( 0.25, 0.75, skinWrap ) );
+	vec3 skinTint = mix( vec3( 1.0 ), vec3( ${t.r.toFixed(3)}, ${t.g.toFixed(3)}, ${t.b.toFixed(3)} ), skinGraze );
+	reflectedLight.directDiffuse += skinWrap * skinTint * directLight.color * BRDF_Lambert( material.diffuseColor );`,
+  );
+}
+
+/** Give a skin material the wrapped diffuse term. */
+export function applySkinWrap(material: THREE.MeshPhysicalMaterial): void {
+  const chunk = skinWrapLightingChunk();
+  material.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace('#include <lights_physical_pars_fragment>', chunk);
+  };
+  material.customProgramCacheKey = () => 'skin-wrap';
+}
 
 // ---------- asset loading ----------
 
@@ -962,6 +1093,7 @@ export function buildAvatar(
       aoMapIntensity: 0.85,
       envMapIntensity: 0.7,
     });
+    applySkinWrap(body);
     const box = new THREE.Box3();
     let eyeBox: THREE.Box3 | null = null;
     const masked: LoadedFigure['masked'] = [];
@@ -979,7 +1111,7 @@ export function buildAvatar(
       const matName = (m.material as THREE.Material).name;
       if (o.name.startsWith('G_') || o.parent?.name.startsWith('G_')) {
         const id = (o.name.startsWith('G_') ? o.name : o.parent!.name).slice(2);
-        const mat = id === 'base' ? baseMaterial() : garmentMaterial(id);
+        const mat = id === 'base' ? baseMaterial() : garmentMaterial(id, m.geometry);
         m.material = mat;
         materials.set(id, mat);
         garments.set(id, m);

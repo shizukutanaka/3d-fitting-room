@@ -152,6 +152,45 @@ describe('wardrobe on the skinned mannequin (GLB garments, bone calibration)', {
     }
   });
 
+  it('only the body material carries the skin wrap program', async () => {
+    const { rig } = await dressed({ ...DEFAULT_OUTFIT, topStyle: 'tee', outerStyle: 'jacket' });
+    const keys = new Map<string, string>();
+    rig.root.traverse((obj) => {
+      if (!(obj instanceof THREE.Mesh)) return;
+      const mat = obj.material as THREE.Material;
+      const garment = obj.name.startsWith('G_') || obj.parent?.name.startsWith('G_');
+      keys.set(garment ? `garment:${obj.name}` : mat.name, mat.customProgramCacheKey());
+    });
+    expect(keys.get('mannequin')).toBe('skin-wrap');
+    const garments = [...keys].filter(([name]) => name.startsWith('garment:'));
+    expect(garments.length).toBeGreaterThan(3);
+    for (const [, key] of garments) expect(key).not.toBe('skin-wrap');
+  });
+
+  it('garments carry a wrinkle and hem normal map without gaining triangles; footwear and the base layer have none', async () => {
+    const { rig } = await dressed({ ...DEFAULT_OUTFIT, topStyle: 'tee', outerStyle: 'jacket' });
+    const glb = readFileSync('public/models/mannequin-a.glb');
+    const jsonLen = glb.readUInt32LE(12);
+    const gltf = JSON.parse(glb.subarray(20, 20 + jsonLen).toString());
+    let seen = 0;
+    rig.root.traverse((obj) => {
+      if (!(obj instanceof THREE.SkinnedMesh) || !obj.name.startsWith('G_')) return;
+      const id = obj.name.slice(2);
+      const mat = obj.material as THREE.MeshPhysicalMaterial;
+      const plain = id === 'base' || id === 'boots' || id === 'sneakers' || id === 'shoesLow';
+      expect(mat.normalMap === null, id).toBe(plain);
+      expect(mat.bumpMap, id).not.toBeNull();
+      const node = gltf.nodes.find((n: { name: string }) => n.name === obj.name);
+      const source = gltf.meshes[node.mesh].primitives.reduce(
+        (sum: number, p: { indices: number }) => sum + gltf.accessors[p.indices].count,
+        0,
+      );
+      expect(obj.geometry.getIndex()!.count, id).toBe(source);
+      seen++;
+    });
+    expect(seen).toBeGreaterThan(10);
+  });
+
   it('every bottom shows (dresses suppress them all)', async () => {
     for (const bottomStyle of BOTTOM_STYLES) {
       if (bottomStyle === 'none') continue;

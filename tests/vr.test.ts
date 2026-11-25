@@ -18,6 +18,10 @@ import {
   VR_PANEL_POSITION,
   XR_FRAME_BUDGET_MS,
   XR_QUALITY_STEPS,
+  XR_VIEWPORT_SCALE_MIN,
+  XR_VIEWPORT_SCALE_RISE,
+  nextXrQualityLevelAfterScale,
+  nextXrViewportScale,
   XR_RECOVER_MS,
   buildVrCategories,
   nextXrQualityLevel,
@@ -220,5 +224,45 @@ describe('panel placement', () => {
     expect(VR_PANEL_POSITION.y).toBeLessThan(3.8);
     // Not on the podium (radius ~1.14 around the origin).
     expect(Math.hypot(VR_PANEL_POSITION.x, VR_PANEL_POSITION.z)).toBeGreaterThan(1.2);
+  });
+});
+
+describe('XR dynamic resolution (viewport scale ahead of the ladder)', () => {
+  it('takes the browser recommendation when there is one, clamped', () => {
+    expect(nextXrViewportScale(1, 4, 0.8)).toBe(0.8);
+    expect(nextXrViewportScale(0.6, 40, 1)).toBe(1);
+    expect(nextXrViewportScale(1, 4, 0.2)).toBe(XR_VIEWPORT_SCALE_MIN);
+    expect(nextXrViewportScale(1, 4, 3)).toBe(1);
+  });
+
+  it('ignores a missing or unusable recommendation', () => {
+    for (const r of [undefined, null, 0, NaN, -1]) {
+      expect(nextXrViewportScale(0.8, XR_FRAME_BUDGET_MS, r)).toBe(0.8);
+    }
+  });
+
+  it('drops by the square root of the overrun, down to the minimum', () => {
+    expect(nextXrViewportScale(1, XR_FRAME_BUDGET_MS * 1.44)).toBeCloseTo(1 / 1.2, 6);
+    expect(nextXrViewportScale(0.8, XR_FRAME_BUDGET_MS * 4)).toBe(XR_VIEWPORT_SCALE_MIN);
+    expect(nextXrViewportScale(XR_VIEWPORT_SCALE_MIN, 100)).toBe(XR_VIEWPORT_SCALE_MIN);
+  });
+
+  it('rises a step at a time with real headroom, up to 1, and holds in between', () => {
+    expect(nextXrViewportScale(0.7, XR_RECOVER_MS - 1)).toBeCloseTo(0.7 + XR_VIEWPORT_SCALE_RISE, 6);
+    expect(nextXrViewportScale(0.98, 2)).toBe(1);
+    const mid = (XR_FRAME_BUDGET_MS + XR_RECOVER_MS) / 2;
+    expect(nextXrViewportScale(0.7, mid)).toBe(0.7);
+  });
+
+  it('keeps the ladder as the last resort', () => {
+    // Over budget: no step down while resolution can still give.
+    expect(nextXrQualityLevelAfterScale(1, 20, 1, 0.8)).toBe(1);
+    expect(nextXrQualityLevelAfterScale(1, 20, 1, XR_VIEWPORT_SCALE_MIN)).toBe(2);
+    // Headroom: no step up until resolution is back at 1.
+    expect(nextXrQualityLevelAfterScale(3, 4, 1, 0.8)).toBe(3);
+    expect(nextXrQualityLevelAfterScale(3, 4, 1, 1)).toBe(2);
+    expect(nextXrQualityLevelAfterScale(1, 4, 1, 1)).toBe(1);
+    // An out-of-range level is still clamped.
+    expect(nextXrQualityLevelAfterScale(99, 20, 0, 0.8)).toBe(XR_QUALITY_STEPS.length - 1);
   });
 });

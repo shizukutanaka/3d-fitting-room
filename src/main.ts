@@ -2028,6 +2028,8 @@ const VR_PHOTO_W = 600;
 const VR_PHOTO_H = 750;
 const vrPhotoTarget = new THREE.WebGLRenderTarget(VR_PHOTO_W, VR_PHOTO_H);
 const vrPhotoCam = new THREE.PerspectiveCamera(40, VR_PHOTO_W / VR_PHOTO_H, 0.1, 60);
+// Same layers as the main view (the mirror frame is off layer 0).
+vrPhotoCam.layers.mask = stage.camera.layers.mask;
 let vrPhotoRequested = false;
 
 async function composeVrPhotoCard(): Promise<Blob> {
@@ -2438,6 +2440,7 @@ interface FittingRoomBridge {
     support: string;
     presenting: boolean;
     qualityLevel: number;
+    viewportScale: number;
     panelButtons: number;
     panelActionIds: string[];
     playerPosition: [number, number, number];
@@ -2455,7 +2458,7 @@ interface FittingRoomBridge {
   vrPhotoDataURL(): Promise<string | null>;
   /** Draw-call measurement from the stage (scene.ts): one
    *  frame with the mirror's reflection pass and without it. */
-  measureStageStats(): { withMirror: number; withoutMirror: number; triangles: number };
+  measureStageStats(): { withMirror: number; withoutMirror: number; triangles: number; stereo: number };
   /** Poke-through measurement (avatar.ts probeLeaks): pixels, over
    *  eight turns of the figure, of body surface that lies under worn
    *  garments (left out of normal drawing) and of base layer that
@@ -2602,6 +2605,7 @@ const bridge: FittingRoomBridge = {
     support: vrSupport,
     presenting: stage.isPresenting(),
     qualityLevel: stage.xrQualityLevel(),
+    viewportScale: stage.xrViewportScale(),
     panelButtons: vrRig ? vrRig.panel.targets.length : 0,
     panelActionIds: vrRig
       ? vrRig.panel.targets.map((o) => String(o.userData.actionId ?? ''))

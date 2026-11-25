@@ -19,6 +19,7 @@
 // sanitize gate in main.ts — VR adds no state path of its own.
 
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { t, type I18nKey } from './i18n';
 import {
   ACCESSORIES,
@@ -280,6 +281,46 @@ export function nextXrQualityLevel(current: number, avgFrameMs: number, floor = 
 }
 
 // ----------------------------------------------------------------
+// XR dynamic resolution: the first thing to give when frames run
+// long is render resolution, adjusted continuously through
+// XRView.requestViewportScale; the ladder above only steps down
+// once the scale is at its minimum, and only steps back up once
+// the scale is back at 1.
+// ----------------------------------------------------------------
+
+/** The smallest viewport scale asked for (per axis: a quarter of
+ *  the pixels at 0.5). */
+export const XR_VIEWPORT_SCALE_MIN = 0.5;
+/** The most the scale rises in one decision. */
+export const XR_VIEWPORT_SCALE_RISE = 0.05;
+
+/** One viewport-scale decision from a windowed average frame time.
+ *  The browser's XRView.recommendedViewportScale wins when it gives
+ *  one (it sees GPU load; the frame time here is CPU-side). Without
+ *  it: over budget, the scale drops by the square root of the
+ *  overrun, since cost follows the pixel count; with real headroom
+ *  it rises a step at a time; in between it holds. */
+export function nextXrViewportScale(current: number, avgFrameMs: number, recommended?: number | null): number {
+  const clamp = (x: number) => Math.min(Math.max(x, XR_VIEWPORT_SCALE_MIN), 1);
+  if (typeof recommended === 'number' && Number.isFinite(recommended) && recommended > 0) return clamp(recommended);
+  const scale = clamp(current);
+  if (avgFrameMs > XR_FRAME_BUDGET_MS) return clamp(scale * Math.sqrt(XR_FRAME_BUDGET_MS / avgFrameMs));
+  if (avgFrameMs < XR_RECOVER_MS) return clamp(scale + XR_VIEWPORT_SCALE_RISE);
+  return scale;
+}
+
+/** The ladder decision with dynamic resolution in front of it: no
+ *  step down until the viewport scale is at its minimum, no step up
+ *  until it is back at 1. */
+export function nextXrQualityLevelAfterScale(current: number, avgFrameMs: number, floor: number, viewportScale: number): number {
+  const next = nextXrQualityLevel(current, avgFrameMs, floor);
+  const held = Math.min(Math.max(current, floor), XR_QUALITY_STEPS.length - 1);
+  if (next > held && viewportScale > XR_VIEWPORT_SCALE_MIN) return held;
+  if (next < held && viewportScale < 1) return held;
+  return next;
+}
+
+// ----------------------------------------------------------------
 // The panel: a fixed board beside the clothing rack
 // ----------------------------------------------------------------
 
@@ -320,6 +361,22 @@ const LABEL_HEIGHT = 0.052;
 const SWATCH_HEIGHT = 0.062;
 const ROW_GAP = 0.022;
 
+/** Objects on this layer are drawn by the main camera (and the
+ *  XR eyes, which inherit its mask) but not by the mirror's
+ *  reflection camera, which stays on layer 0: the reflection pass
+ *  shows the person and the room, not the panel, the mirror's own
+ *  frame or the controller rays. Layers 1 and 2 are three.js's
+ *  left/right eye layers. */
+export const NO_MIRROR_LAYER = 3;
+
+/** The panel face is one canvas texture on one quad (one draw
+ *  call for every label, button and swatch). Canvas pixels per
+ *  meter: 1024 px across the board, which is at or above the
+ *  headset's angular resolution from the spawn point. */
+const FACE_PX_W = 1024;
+const FACE_SCALE = FACE_PX_W / VR_PANEL_WIDTH;
+const FACE_PX_H = Math.round(VR_PANEL_HEIGHT * FACE_SCALE);
+
 function roundedRect(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -344,64 +401,51 @@ function roundedRect(
 const FONT_STACK =
   '"Hiragino Sans", "Noto Sans JP", "Noto Sans SC", "Noto Sans KR", "Malgun Gothic", "Microsoft YaHei", sans-serif';
 
-/** A canvas texture for one button: label text shrunk to fit,
- *  brass when selected, dark walnut otherwise. Drawn with
- *  device fonts only — no font assets ship with the app. */
-function buttonTexture(label: string, selected: boolean, wide: boolean): THREE.CanvasTexture {
-  const cw = wide ? 1024 : 512;
-  const ch = 128;
-  const canvas = document.createElement('canvas');
-  canvas.width = cw;
-  canvas.height = ch;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('2d context unavailable');
+/** One button drawn into the face canvas (pixel rect): label text
+ *  shrunk to fit, brass when selected, dark walnut otherwise.
+ *  Drawn with device fonts only — no font assets ship with the app. */
+function drawButton(
+  ctx: CanvasRenderingContext2D,
+  label: string,
+  selected: boolean,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): void {
+  const r = h * 0.2;
   ctx.fillStyle = selected ? '#b08d57' : '#38302a';
-  roundedRect(ctx, 3, 3, cw - 6, ch - 6, 26);
+  roundedRect(ctx, x + 2, y + 2, w - 4, h - 4, r);
   ctx.fill();
   ctx.strokeStyle = selected ? '#e8cf9f' : '#6d5c44';
-  ctx.lineWidth = 3;
-  roundedRect(ctx, 3, 3, cw - 6, ch - 6, 26);
+  ctx.lineWidth = 2.5;
+  roundedRect(ctx, x + 2, y + 2, w - 4, h - 4, r);
   ctx.stroke();
   ctx.fillStyle = selected ? '#221a12' : '#f2e9da';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  let size = 52;
+  let size = Math.round(h * 0.4);
   const font = (s: number) => `600 ${s}px ${FONT_STACK}`;
   ctx.font = font(size);
-  while (size > 22 && ctx.measureText(label).width > cw - 44) {
-    size -= 4;
+  while (size > 14 && ctx.measureText(label).width > w - 24) {
+    size -= 2;
     ctx.font = font(size);
   }
-  ctx.fillText(label, cw / 2, ch / 2 + 2);
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 4;
-  return tex;
+  ctx.fillText(label, x + w / 2, y + h / 2 + 1);
 }
 
-function labelTexture(text: string): THREE.CanvasTexture {
-  const cw = 1024;
-  const ch = 56;
-  const canvas = document.createElement('canvas');
-  canvas.width = cw;
-  canvas.height = ch;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('2d context unavailable');
+function drawLabel(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, w: number, h: number): void {
   ctx.fillStyle = '#e9dfc9';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  let size = 38;
+  let size = Math.round(h * 0.68);
   const font = (s: number) => `600 ${s}px ${FONT_STACK}`;
   ctx.font = font(size);
-  while (size > 20 && ctx.measureText(text).width > cw - 16) {
-    size -= 3;
+  while (size > 16 && ctx.measureText(text).width > w - 12) {
+    size -= 2;
     ctx.font = font(size);
   }
-  ctx.fillText(text, 4, ch / 2 + 1);
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 4;
-  return tex;
+  ctx.fillText(text, x + 4, y + h / 2 + 1);
 }
 
 /** Wrap a paragraph into lines that fit `maxWidth`: word by word
@@ -440,35 +484,23 @@ function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number)
   return lines;
 }
 
-/** A canvas texture for a wrapped paragraph (the principle note):
- *  smaller, dimmer type than the labels, as many lines as the
- *  text needs. Returns the texture and its aspect (height/width)
- *  so the caller can size the plane. */
-function noteTexture(text: string): { tex: THREE.CanvasTexture; aspect: number } {
-  const cw = 1024;
-  const pad = 16;
-  const fontSize = 30;
-  const lineHeight = 44;
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('2d context unavailable');
+/** A wrapped paragraph (the principle note) drawn into the face
+ *  canvas with its top-left at (x, y): smaller, dimmer type than
+ *  the labels, as many lines as the text needs. Returns the height
+ *  it consumed, in pixels. */
+function drawNote(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, w: number): number {
+  const pad = 14;
+  const fontSize = 27;
+  const lineHeight = 39;
   ctx.font = `500 ${fontSize}px ${FONT_STACK}`;
-  const lines = wrapText(ctx, text, cw - pad * 2);
-  const ch = lines.length * lineHeight + pad;
-  canvas.width = cw;
-  canvas.height = ch;
-  // Resizing the canvas resets the context state; set it again.
-  ctx.font = `500 ${fontSize}px ${FONT_STACK}`;
+  const lines = wrapText(ctx, text, w - pad * 2);
   ctx.fillStyle = '#cfc2a8';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
   lines.forEach((line, i) => {
-    ctx.fillText(line, pad, pad / 2 + i * lineHeight);
+    ctx.fillText(line, x + pad, y + pad / 2 + i * lineHeight);
   });
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.anisotropy = 4;
-  return { tex, aspect: ch / cw };
+  return lines.length * lineHeight + pad;
 }
 
 export class VrPanel {
@@ -481,6 +513,14 @@ export class VrPanel {
    *  on the board, or null while the board shows the page without
    *  it. Read by the verification bridge. */
   noteText: string | null = null;
+  private readonly faceCanvas: HTMLCanvasElement;
+  private readonly faceTexture: THREE.CanvasTexture;
+  private readonly highlight: THREE.Mesh;
+  /** Press targets are invisible unit quads (raycast only, never
+   *  drawn), scaled to each button's size. */
+  private readonly hitGeometry = new THREE.PlaneGeometry(1, 1);
+  private readonly hitMaterial = new THREE.MeshBasicMaterial();
+  private ctx: CanvasRenderingContext2D | null = null;
 
   constructor() {
     this.group.position.copy(VR_PANEL_POSITION);
@@ -496,24 +536,66 @@ export class VrPanel {
     const frameMat = new THREE.MeshStandardMaterial({
       color: '#b08d57', roughness: 0.3, metalness: 1, envMapIntensity: 1.2,
     });
+    // The four frame bars never move: one merged mesh.
     const frameGeoH = new THREE.BoxGeometry(VR_PANEL_WIDTH + 0.03, 0.028, 0.045);
     const frameGeoV = new THREE.BoxGeometry(0.028, VR_PANEL_HEIGHT + 0.03, 0.045);
-    for (const sy of [-1, 1]) {
-      const bar = new THREE.Mesh(frameGeoH, frameMat);
-      bar.position.set(0, sy * (VR_PANEL_HEIGHT / 2 + 0.008), -0.02);
-      this.group.add(bar);
-    }
-    for (const sx of [-1, 1]) {
-      const bar = new THREE.Mesh(frameGeoV, frameMat);
-      bar.position.set(sx * (VR_PANEL_WIDTH / 2 + 0.008), 0, -0.02);
-      this.group.add(bar);
-    }
+    const bars = [
+      ...[-1, 1].map((sy) => frameGeoH.clone().translate(0, sy * (VR_PANEL_HEIGHT / 2 + 0.008), -0.02)),
+      ...[-1, 1].map((sx) => frameGeoV.clone().translate(sx * (VR_PANEL_WIDTH / 2 + 0.008), 0, -0.02)),
+    ];
+    const frame = new THREE.Mesh(mergeGeometries(bars, false)!, frameMat);
+    for (const g of [frameGeoH, frameGeoV, ...bars]) g.dispose();
+    this.group.add(frame);
+    // The face: every label, button and swatch is painted into
+    // one canvas, shown on one transparent quad over the backing.
+    this.faceCanvas = document.createElement('canvas');
+    this.faceCanvas.width = FACE_PX_W;
+    this.faceCanvas.height = FACE_PX_H;
+    this.faceTexture = new THREE.CanvasTexture(this.faceCanvas);
+    this.faceTexture.colorSpace = THREE.SRGBColorSpace;
+    this.faceTexture.anisotropy = 4;
+    const face = new THREE.Mesh(
+      new THREE.PlaneGeometry(VR_PANEL_WIDTH, VR_PANEL_HEIGHT),
+      new THREE.MeshBasicMaterial({ map: this.faceTexture, transparent: true }),
+    );
+    face.position.z = 0.01;
+    this.group.add(face);
+    // Hover feedback: one translucent quad moved over the hovered
+    // button, drawn only while something is hovered.
+    this.highlight = new THREE.Mesh(
+      this.hitGeometry,
+      new THREE.MeshBasicMaterial({ color: '#e8cf9f', transparent: true, opacity: 0.3, depthWrite: false }),
+    );
+    this.highlight.visible = false;
+    this.highlight.renderOrder = 1;
+    this.group.add(this.highlight);
+    for (const m of [backing, frame, face, this.highlight]) m.layers.set(NO_MIRROR_LAYER);
     this.group.add(this.content);
   }
 
   /** Objects a controller ray can press, in scene order. */
   get targets(): readonly THREE.Object3D[] {
     return this.hitMeshes;
+  }
+
+  private addTarget(actionId: string, x: number, y: number, w: number, h: number): void {
+    const mesh = new THREE.Mesh(this.hitGeometry, this.hitMaterial);
+    mesh.position.set(x, y, 0.012);
+    mesh.scale.set(w, h, 1);
+    mesh.visible = false;
+    mesh.userData.actionId = actionId;
+    this.content.add(mesh);
+    this.hitMeshes.push(mesh);
+  }
+
+  /** Panel meters (center + size) to a face-canvas pixel rect. */
+  private px(x: number, y: number, w: number, h: number): [number, number, number, number] {
+    return [
+      (x - w / 2 + VR_PANEL_WIDTH / 2) * FACE_SCALE,
+      (VR_PANEL_HEIGHT / 2 - y - h / 2) * FACE_SCALE,
+      w * FACE_SCALE,
+      h * FACE_SCALE,
+    ];
   }
 
   private addButton(
@@ -525,52 +607,32 @@ export class VrPanel {
     w: number,
     h: number,
   ): void {
-    const tex = buttonTexture(label, selected, w > 0.4);
-    const mat = new THREE.MeshBasicMaterial({ map: tex });
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
-    mesh.position.set(x, y, 0.012);
-    mesh.userData.actionId = actionId;
-    mesh.userData.baseScale = 1;
-    this.content.add(mesh);
-    this.hitMeshes.push(mesh);
+    if (this.ctx) drawButton(this.ctx, label, selected, ...this.px(x, y, w, h));
+    this.addTarget(actionId, x, y, w, h);
   }
 
   private addLabel(text: string, x: number, y: number, w: number): void {
-    const tex = labelTexture(text);
-    const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, LABEL_HEIGHT), mat);
-    mesh.position.set(x, y, 0.01);
-    this.content.add(mesh);
+    if (this.ctx) drawLabel(this.ctx, text, ...this.px(x, y, w, LABEL_HEIGHT));
   }
 
   /** A wrapped paragraph pinned with its top edge at `topY`;
    *  returns the height it consumed. Not a press target. */
   private addNote(text: string, topY: number, w: number): number {
-    const { tex, aspect } = noteTexture(text);
-    const h = w * aspect;
-    const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
-    mesh.position.set(0, topY - h / 2, 0.01);
-    this.content.add(mesh);
-    return h;
+    if (!this.ctx) return 0;
+    const [px, py, pw] = this.px(0, topY, w, 0);
+    return drawNote(this.ctx, text, px, py, pw) / FACE_SCALE;
   }
 
   private addSwatch(hex: string, selected: boolean, actionId: string, x: number, y: number, w: number): void {
-    if (selected) {
-      const frame = new THREE.Mesh(
-        new THREE.PlaneGeometry(w + 0.014, SWATCH_HEIGHT + 0.014),
-        new THREE.MeshBasicMaterial({ color: '#e8cf9f' }),
-      );
-      frame.position.set(x, y, 0.011);
-      this.content.add(frame);
+    if (this.ctx) {
+      if (selected) {
+        this.ctx.fillStyle = '#e8cf9f';
+        this.ctx.fillRect(...this.px(x, y, w + 0.014, SWATCH_HEIGHT + 0.014));
+      }
+      this.ctx.fillStyle = hex;
+      this.ctx.fillRect(...this.px(x, y, w, SWATCH_HEIGHT));
     }
-    const mat = new THREE.MeshStandardMaterial({ color: hex, roughness: 0.55, envMapIntensity: 0.5 });
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, SWATCH_HEIGHT), mat);
-    mesh.position.set(x, y, 0.012);
-    mesh.userData.actionId = actionId;
-    mesh.userData.baseScale = 1;
-    this.content.add(mesh);
-    this.hitMeshes.push(mesh);
+    this.addTarget(actionId, x, y, w, SWATCH_HEIGHT);
   }
 
   /** Rebuild the board's buttons from the current state. Called
@@ -578,18 +640,10 @@ export class VrPanel {
    *  changes — presses are discrete events, so a rebuild per
    *  change is cheap and keeps exactly one source of truth. */
   refresh(state: VrPanelState): void {
-    for (const child of [...this.content.children]) {
-      this.content.remove(child);
-      child.traverse((obj) => {
-        const mesh = obj as THREE.Mesh;
-        if (mesh.geometry) mesh.geometry.dispose();
-        const mat = mesh.material as THREE.MeshBasicMaterial | undefined;
-        if (mat) {
-          mat.map?.dispose();
-          mat.dispose();
-        }
-      });
-    }
+    this.content.clear();
+    this.highlight.visible = false;
+    this.ctx = this.faceCanvas.getContext('2d');
+    this.ctx?.clearRect(0, 0, FACE_PX_W, FACE_PX_H);
     this.hitMeshes = [];
     this.hovered = null;
     this.noteText = null;
@@ -714,24 +768,18 @@ export class VrPanel {
       this.addNote(note, cursorY, PANEL_INNER_WIDTH);
       this.noteText = note;
     }
+    this.faceTexture.needsUpdate = true;
   }
 
-  /** Tint/scale the hovered button (called per frame from the
+  /** Highlight the hovered button (called per frame from the
    *  rig's raycasts). Pass null when nothing is hovered. */
   setHovered(target: THREE.Object3D | null): void {
     if (this.hovered === target) return;
-    if (this.hovered) {
-      const prev = this.hovered as THREE.Mesh;
-      prev.scale.setScalar((prev.userData.baseScale as number) ?? 1);
-      const mat = prev.material as THREE.MeshBasicMaterial;
-      if (mat && 'color' in mat) mat.color.setRGB(1, 1, 1);
-    }
     this.hovered = target;
-    if (this.hovered) {
-      const mesh = this.hovered as THREE.Mesh;
-      mesh.scale.setScalar(1.06);
-      const mat = mesh.material as THREE.MeshBasicMaterial;
-      if (mat && 'color' in mat) mat.color.setRGB(1.3, 1.18, 0.95);
+    this.highlight.visible = target !== null;
+    if (target) {
+      this.highlight.position.set(target.position.x, target.position.y, 0.013);
+      this.highlight.scale.copy(target.scale).multiplyScalar(1.04);
     }
   }
 }
@@ -869,6 +917,7 @@ export function createVrRig(stage: StageLike, host: VrHost): VrRig {
       new THREE.LineBasicMaterial({ color: 0xe8cf9f, transparent: true, opacity: 0.55 }),
     );
     ray.name = 'vr-ray';
+    ray.layers.set(NO_MIRROR_LAYER);
     controller.add(ray);
     controller.addEventListener('select', () => {
       const hit = castFrom(controller);
@@ -885,6 +934,7 @@ export function createVrRig(stage: StageLike, host: VrHost): VrRig {
       new THREE.MeshBasicMaterial({ color: 0xe8cf9f }),
     );
     dot.visible = false;
+    dot.layers.set(NO_MIRROR_LAYER);
     stage.scene.add(dot);
     hitDots.push(dot);
   }
@@ -965,6 +1015,7 @@ export function createVrRig(stage: StageLike, host: VrHost): VrRig {
         new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }),
       );
       mesh.name = 'vr-diag-board';
+      mesh.layers.set(NO_MIRROR_LAYER);
       mesh.position.set(0, VR_PANEL_HEIGHT / 2 + (VR_PANEL_WIDTH * (384 / 1024)) / 2 + 0.03, 0);
       panel.group.add(mesh);
       diagBoard = { mesh, ctx, tex };
