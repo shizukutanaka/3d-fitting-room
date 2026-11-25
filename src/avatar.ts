@@ -119,6 +119,13 @@ export interface AvatarRig {
   setGarments(worn: WornGarments): void;
   /** Hem lengths of the worn garments relative to body landmarks. */
   garmentLengths(): GarmentLength[];
+  /** Verification: while on, the figure is drawn flat black except
+   *  the triangles under worn garments — the body's in magenta (they
+   *  are left out in normal drawing) and the base layer's in cyan
+   *  (they are drawn) — so a pixel count says how much pokes through. */
+  probeLeaks(on: boolean): void;
+  /** How many body triangles are currently left out as covered. */
+  maskedTriangles(): number;
   tick(timeSec: number, gazeTarget?: THREE.Vector3): void;
 }
 
@@ -330,6 +337,7 @@ interface FigureAsset {
   scene: THREE.Group;
   normal: THREE.Texture | null;
   ao: THREE.Texture | null;
+  cover: CoverMap;
 }
 
 const assetCache = new Map<FigureId, Promise<FigureAsset>>();
@@ -350,7 +358,7 @@ function loadFigure(id: FigureId): Promise<FigureAsset> {
       tex(`${base}-ao.webp`, false),
     ]).then(([gltf, normal, ao]) => {
       keepGarmentsOutside(gltf.scene);
-      return { scene: gltf.scene, normal, ao };
+      return { scene: gltf.scene, normal, ao, cover: coveredByGarments(gltf.scene) };
     });
     assetCache.set(id, p);
   }
@@ -363,8 +371,9 @@ const PUMP_FLEX = 0.3;
 const FOOT_BONES = ['leftFoot', 'rightFoot', 'leftToes', 'rightToes'];
 const TOP_IDS = new Set(['tee', 'blouse', 'hoodie', 'dress', 'dressLong']);
 const OUTER_IDS = new Set(['jacket', 'cardigan', 'coat']);
-/** Gaps (m) above the base layer: a top worn under an outer layer is drawn
- *  in to UNDER_OVER_BASE; the outer layer keeps at least OUTER_OVER_BASE. */
+/** Gaps (m) above the base layer: legwear keeps at least
+ *  UNDER_OVER_BASE over the legs, and a top worn under an outer layer
+ *  is drawn in to it; the outer layer keeps at least OUTER_OVER_BASE. */
 const UNDER_OVER_BASE = 0.004;
 const OUTER_OVER_BASE = 0.011;
 
@@ -374,6 +383,17 @@ function garmentClearance(id: string): number {
   if (OUTER_IDS.has(id)) return 0.008;
   return 0.005;
 }
+
+/** Extra gap (m) for clothes where the cloth sits tight over a part
+ *  that moves under it, by the body's skinning bone: with the 5 mm
+ *  (8 mm outer) minimum, fitted parts get 5-10 mm. */
+const LEG_EXTRA = 0.002;
+const PART_EXTRA: [RegExp, number][] = [
+  [/Shoulder|UpperArm/, 0.003],
+  [/UpperLeg/, LEG_EXTRA],
+  [/[cC]hest/, 0.001],
+];
+const MAX_CLEARANCE = 0.01;
 
 /** The pipeline smooths each garment after cutting it from the body,
  *  which pulls convex areas (hips, shoulders, toes) inside the skin.
@@ -386,6 +406,7 @@ export function keepGarmentsOutside(scene: THREE.Object3D): void {
   const grid = new Map<string, number[]>();
   const bp: number[] = [];
   const bn: number[] = [];
+  const bx: number[] = [];
   const garments: [THREE.Mesh, string][] = [];
   const v = new THREE.Vector3();
   const n = new THREE.Vector3();
@@ -402,12 +423,21 @@ export function keepGarmentsOutside(scene: THREE.Object3D): void {
     const nor = m.geometry.getAttribute('normal');
     if (!nor) return;
     nm.getNormalMatrix(m.matrixWorld);
+    const si = m.geometry.getAttribute('skinIndex');
+    const sw = m.geometry.getAttribute('skinWeight');
+    const extra = ((m as THREE.SkinnedMesh).skeleton?.bones ?? []).map(
+      (b) => PART_EXTRA.find(([re]) => re.test(b.name))?.[1] ?? 0,
+    );
     for (let i = 0; i < pos.count; i++) {
       v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
       n.fromBufferAttribute(nor, i).applyMatrix3(nm).normalize();
       const k = bp.length / 3;
       bp.push(v.x, v.y, v.z);
       bn.push(n.x, n.y, n.z);
+      // Weighted by the skin weights, so the gap blends between parts.
+      let x = 0;
+      if (si && sw) for (let c = 0; c < 4; c++) x += sw.getComponent(i, c) * (extra[si.getComponent(i, c)] ?? 0);
+      bx.push(x);
       const key = `${Math.floor(v.x / CELL)},${Math.floor(v.y / CELL)},${Math.floor(v.z / CELL)}`;
       const cell = grid.get(key);
       if (cell) cell.push(k);
@@ -440,6 +470,8 @@ export function keepGarmentsOutside(scene: THREE.Object3D): void {
     const isBase = id === 'base';
     const isOuter = OUTER_IDS.has(id);
     const pos = m.geometry.getAttribute('position') as THREE.BufferAttribute;
+    const clothes = !isBase && !/^(shoes|sneakers|boots)/.test(id);
+    const bottom = clothes && !isOuter && !TOP_IDS.has(id);
     if (!/^(shoes|sneakers|boots)/.test(id)) collapseSpikes(m.geometry);
     inv.copy(m.matrixWorld).invert();
     const layered = TOP_IDS.has(id);
@@ -447,36 +479,50 @@ export function keepGarmentsOutside(scene: THREE.Object3D): void {
     for (let i = 0; i < pos.count; i++) {
       v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
       const [cx, cy, cz] = cellOf(v.x, v.y, v.z);
-      let best = Infinity;
       let bi = -1;
-      for (let dx = -1; dx <= 1; dx++)
-        for (let dy = -1; dy <= 1; dy++)
-          for (let dz = -1; dz <= 1; dz++) {
-            const cell = grid.get(`${cx + dx},${cy + dy},${cz + dz}`);
-            if (!cell) continue;
-            for (const k of cell) {
-              const ex = v.x - bp[3 * k];
-              const ey = v.y - bp[3 * k + 1];
-              const ez = v.z - bp[3 * k + 2];
-              const d = ex * ex + ey * ey + ez * ez;
-              if (d < best) {
-                best = d;
-                bi = k;
+      let nx = 0;
+      let ny = 0;
+      let nz = 0;
+      let gap = 0;
+      // A push can bring another body vertex nearest: look again.
+      for (let pass = 0; pass < 3; pass++) {
+        const [px, py, pz] = cellOf(v.x, v.y, v.z);
+        let best = Infinity;
+        bi = -1;
+        for (let dx = -1; dx <= 1; dx++)
+          for (let dy = -1; dy <= 1; dy++)
+            for (let dz = -1; dz <= 1; dz++) {
+              const cell = grid.get(`${px + dx},${py + dy},${pz + dz}`);
+              if (!cell) continue;
+              for (const k of cell) {
+                const ex = v.x - bp[3 * k];
+                const ey = v.y - bp[3 * k + 1];
+                const ez = v.z - bp[3 * k + 2];
+                const d = ex * ex + ey * ey + ez * ez;
+                if (d < best) {
+                  best = d;
+                  bi = k;
+                }
               }
             }
-          }
-      if (bi < 0) continue;
-      const nx = bn[3 * bi];
-      const ny = bn[3 * bi + 1];
-      const nz = bn[3 * bi + 2];
-      let gap = (v.x - bp[3 * bi]) * nx + (v.y - bp[3 * bi + 1]) * ny + (v.z - bp[3 * bi + 2]) * nz;
-      const clear = isOuter ? Math.max(garmentClearance(id), baseAround(v.x, v.y, v.z) + OUTER_OVER_BASE) : garmentClearance(id);
-      if (gap < clear) {
+        if (bi < 0) break;
+        nx = bn[3 * bi];
+        ny = bn[3 * bi + 1];
+        nz = bn[3 * bi + 2];
+        gap = (v.x - bp[3 * bi]) * nx + (v.y - bp[3 * bi + 1]) * ny + (v.z - bp[3 * bi + 2]) * nz;
+        // Legwear clears the base layer's leg hems too; higher up it
+        // stays close, under the hem of the top.
+        const overBase = isOuter ? OUTER_OVER_BASE : bottom && bx[bi] >= LEG_EXTRA / 2 ? UNDER_OVER_BASE : -Infinity;
+        const clear = clothes
+          ? Math.max(Math.min(garmentClearance(id) + bx[bi], MAX_CLEARANCE), baseAround(v.x, v.y, v.z) + overBase + bx[bi])
+          : garmentClearance(id);
+        if (gap >= clear) break;
         const push = clear - gap;
         v.set(v.x + nx * push, v.y + ny * push, v.z + nz * push);
         gap = clear;
         pos.setXYZ(i, ...w.copy(v).applyMatrix4(inv).toArray());
       }
+      if (bi < 0) continue;
       if (isBase) {
         const key = `${cx},${cy},${cz}`;
         baseGap.set(key, Math.max(baseGap.get(key) ?? 0, gap));
@@ -502,6 +548,141 @@ export function keepGarmentsOutside(scene: THREE.Object3D): void {
     }
     m.geometry.computeBoundingSphere();
   }
+}
+
+/** How far (m) out along its normal a body vertex looks for the
+ *  garment that covers it, and how far in from a garment's open edge
+ *  (hem, cuff, neckline) the body stays drawn, so nothing is missing
+ *  where one can look in. */
+const COVER_REACH = 0.05;
+const COVER_DEPTH = 0.015;
+const COVER_EDGE = 0.06;
+
+/** Per garment id, the vertices of the body ('body') and of the base
+ *  layer ('base') that the garment hides. */
+export type CoverMap = Record<'body' | 'base', Map<string, Uint8Array>>;
+
+/** Which body and base-layer vertices each garment covers, in bind
+ *  pose (garments share the body's weights, so it holds when posed).
+ *  A vertex counts as covered when its normal meets, within
+ *  COVER_REACH, a garment triangle skinned to one of the vertex's own
+ *  bones, and no open edge of that garment is within COVER_EDGE. */
+export function coveredByGarments(scene: THREE.Object3D): CoverMap {
+  scene.updateMatrixWorld(true);
+  const out: CoverMap = { body: new Map(), base: new Map() };
+  const targets: ['body' | 'base', THREE.Mesh][] = [];
+  const garments: [string, THREE.Mesh][] = [];
+  scene.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const gname = o.name.startsWith('G_') ? o.name : o.parent?.name.startsWith('G_') ? o.parent.name : null;
+    if (gname) garments.push([gname.slice(2), m]);
+    if (gname === 'G_base') targets.push(['base', m]);
+    else if (!gname && (m.material as THREE.Material).name === 'mannequin') targets.push(['body', m]);
+  });
+  const cell = (x: number) => Math.floor(x / COVER_EDGE);
+  const v = new THREE.Vector3();
+  const n = new THREE.Vector3();
+  const nm = new THREE.Matrix3();
+  const ray = new THREE.Ray();
+  const hit = new THREE.Vector3();
+  const [a, b, c] = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+  for (const [id, g] of garments) {
+    const gp = g.geometry.getAttribute('position');
+    const gi = g.geometry.getAttribute('skinIndex');
+    const gw = g.geometry.getAttribute('skinWeight');
+    const index = g.geometry.getIndex();
+    if (!gi || !gw || !index) continue;
+    const world = new Float32Array(gp.count * 3);
+    const bone = new Uint16Array(gp.count);
+    // Vertices split along UV and normal seams share a position:
+    // weld them, or every seam would read as an open edge.
+    const weld = new Uint32Array(gp.count);
+    const first = new Map<string, number>();
+    for (let i = 0; i < gp.count; i++) {
+      v.fromBufferAttribute(gp, i);
+      const at = `${Math.round(v.x * 1e5)},${Math.round(v.y * 1e5)},${Math.round(v.z * 1e5)}`;
+      weld[i] = first.get(at) ?? i;
+      if (weld[i] === i) first.set(at, i);
+      v.applyMatrix4(g.matrixWorld).toArray(world, 3 * i);
+      let top = 0;
+      for (let k = 1; k < 4; k++) if (gw.getComponent(i, k) > gw.getComponent(i, top)) top = k;
+      bone[i] = gi.getComponent(i, top);
+    }
+    // Triangles by grid cell, and the vertices on an open edge
+    // (an edge used by one triangle only).
+    const tris = new Map<string, number[]>();
+    const edges = new Map<number, number>();
+    for (let f = 0; f < index.count; f += 3) {
+      const lo = [Infinity, Infinity, Infinity];
+      const hi = [-Infinity, -Infinity, -Infinity];
+      for (let e = 0; e < 3; e++) {
+        const p = index.getX(f + e);
+        const q = index.getX(f + ((e + 1) % 3));
+        const key = Math.min(weld[p], weld[q]) * gp.count + Math.max(weld[p], weld[q]);
+        edges.set(key, (edges.get(key) ?? 0) + 1);
+        for (let d = 0; d < 3; d++) {
+          lo[d] = Math.min(lo[d], world[3 * p + d]);
+          hi[d] = Math.max(hi[d], world[3 * p + d]);
+        }
+      }
+      for (let x = cell(lo[0]); x <= cell(hi[0]); x++)
+        for (let y = cell(lo[1]); y <= cell(hi[1]); y++)
+          for (let z = cell(lo[2]); z <= cell(hi[2]); z++) {
+            const key = `${x},${y},${z}`;
+            const list = tris.get(key);
+            if (list) list.push(f);
+            else tris.set(key, [f]);
+          }
+    }
+    const open: number[] = [];
+    for (const [key, uses] of edges) if (uses === 1) open.push(Math.floor(key / gp.count), key % gp.count);
+    for (const [kind, t] of targets) {
+      if (g === t) continue;
+      const pos = t.geometry.getAttribute('position');
+      const nor = t.geometry.getAttribute('normal');
+      const si = t.geometry.getAttribute('skinIndex');
+      const sw = t.geometry.getAttribute('skinWeight');
+      if (!nor || !si || !sw) continue;
+      nm.getNormalMatrix(t.matrixWorld);
+      const flag = new Uint8Array(pos.count);
+      for (let i = 0; i < pos.count; i++) {
+        v.fromBufferAttribute(pos, i).applyMatrix4(t.matrixWorld);
+        n.fromBufferAttribute(nor, i).applyMatrix3(nm).normalize();
+        const mine = (bn: number) => [0, 1, 2, 3].some((k) => si.getComponent(i, k) === bn && sw.getComponent(i, k) > 0.2);
+        // Start under the surface, so a vertex that pokes through
+        // the garment still counts as under it.
+        ray.origin.copy(v).addScaledVector(n, -COVER_DEPTH);
+        ray.direction.copy(n);
+        const seen = new Set<number>();
+        search: for (let x = -1; x <= 1; x++)
+          for (let y = -1; y <= 1; y++)
+            for (let z = -1; z <= 1; z++)
+              for (const f of tris.get(`${cell(v.x) + x},${cell(v.y) + y},${cell(v.z) + z}`) ?? []) {
+                if (seen.has(f)) continue;
+                seen.add(f);
+                const [p, q, r] = [index.getX(f), index.getX(f + 1), index.getX(f + 2)];
+                if (!mine(bone[p]) && !mine(bone[q]) && !mine(bone[r])) continue;
+                a.fromArray(world, 3 * p);
+                b.fromArray(world, 3 * q);
+                c.fromArray(world, 3 * r);
+                if (ray.intersectTriangle(a, b, c, false, hit) && hit.distanceTo(ray.origin) < COVER_REACH) {
+                  flag[i] = 1;
+                  break search;
+                }
+              }
+        if (!flag[i]) continue;
+        for (const p of open) {
+          if (v.distanceToSquared(a.fromArray(world, 3 * p)) < COVER_EDGE * COVER_EDGE) {
+            flag[i] = 0;
+            break;
+          }
+        }
+      }
+      out[kind].set(id, flag);
+    }
+  }
+  return out;
 }
 
 /** Fold back stray vertices left by the pipeline's bisect/join steps:
@@ -750,9 +931,36 @@ interface LoadedFigure {
   body: THREE.MeshPhysicalMaterial;
   garments: Map<string, THREE.SkinnedMesh>;
   materials: Map<string, THREE.MeshPhysicalMaterial>;
+  /** The body and base-layer meshes whose covered triangles are
+   *  left out, with their full triangle lists. */
+  masked: { mesh: THREE.SkinnedMesh; full: ArrayLike<number>; cover: Map<string, Uint8Array> }[];
 }
 
-export function buildAvatar(initial: CharacterParams, figure: FigureId = 'a', legRatio: LegRatio = 'standard'): AvatarRig {
+/** Give a mesh its own index over the shared vertex data, so one
+ *  rig can leave triangles out without touching another rig. */
+function ownIndex(m: THREE.SkinnedMesh): ArrayLike<number> | null {
+  const src = m.geometry;
+  if (!src.index) return null;
+  const geo = new THREE.BufferGeometry();
+  for (const [name, attr] of Object.entries(src.attributes)) geo.setAttribute(name, attr);
+  geo.setIndex(src.index.clone());
+  geo.boundingSphere = src.boundingSphere;
+  m.geometry = geo;
+  return src.index.array;
+}
+
+const PROBE_HIDDEN = new THREE.MeshBasicMaterial({ color: '#000000', side: THREE.DoubleSide });
+const PROBE_BODY = new THREE.MeshBasicMaterial({ color: '#ff00ff', toneMapped: false });
+const PROBE_BASE = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false, side: THREE.DoubleSide });
+
+export function buildAvatar(
+  initial: CharacterParams,
+  figure: FigureId = 'a',
+  legRatio: LegRatio = 'standard',
+  /** Leave out the body surface under worn garments (off for export:
+   *  an exported figure keeps its whole body). */
+  maskBody = true,
+): AvatarRig {
   const root = new THREE.Group();
   root.name = 'avatar';
   const head = new THREE.Group();
@@ -780,6 +988,8 @@ export function buildAvatar(initial: CharacterParams, figure: FigureId = 'a', le
   let worn: WornGarments | null = null;
   let scales: BoneScales | null = null;
   let fitCache: AccessoryFit | null = null;
+  let probing = false;
+  let maskedCount = 0;
   let target = poseTargets('stand');
   const now: JointAngles = poseTargets('stand');
   let gazeYaw = 0;
@@ -834,6 +1044,14 @@ export function buildAvatar(initial: CharacterParams, figure: FigureId = 'a', le
       if (!isDress(worn.top)) add('bottom', worn.bottom);
       return out;
     },
+    probeLeaks(on) {
+      if (!current) return;
+      probing = on;
+      for (const [id, m] of current.garments) m.material = on ? (id === 'base' ? PROBE_BASE : PROBE_HIDDEN) : current.materials.get(id)!;
+      for (const { mesh } of current.masked) if (mesh !== current.garments.get('base')) mesh.material = on ? PROBE_BODY : current.body;
+      applyMask();
+    },
+    maskedTriangles: () => maskedCount,
     tick,
   };
 
@@ -878,6 +1096,11 @@ export function buildAvatar(initial: CharacterParams, figure: FigureId = 'a', le
     applySkinWrap(body);
     const box = new THREE.Box3();
     let eyeBox: THREE.Box3 | null = null;
+    const masked: LoadedFigure['masked'] = [];
+    const mask = (m: THREE.SkinnedMesh, kind: 'body' | 'base') => {
+      const full = maskBody ? ownIndex(m) : null;
+      if (full) masked.push({ mesh: m, full, cover: asset.cover[kind] });
+    };
     group.traverse((o) => {
       if ((o as THREE.Bone).isBone) bones.set(o.name, o as THREE.Bone);
       const m = o as THREE.SkinnedMesh;
@@ -893,7 +1116,9 @@ export function buildAvatar(initial: CharacterParams, figure: FigureId = 'a', le
         materials.set(id, mat);
         garments.set(id, m);
         m.visible = id === 'base';
+        if (id === 'base') mask(m, 'base');
       } else {
+        if (matName === 'mannequin') mask(m, 'body');
         m.material = body;
         m.geometry.computeBoundingBox();
         const b = m.geometry.boundingBox!.clone().applyMatrix4(m.matrixWorld);
@@ -944,6 +1169,7 @@ export function buildAvatar(initial: CharacterParams, figure: FigureId = 'a', le
       body,
       garments,
       materials,
+      masked,
     };
     (loaded as LoadedFigure & { eyeBox: THREE.Box3 | null; box: THREE.Box3 }).eyeBox = eyeBox;
     (loaded as LoadedFigure & { box: THREE.Box3 }).box = box;
@@ -1136,6 +1362,40 @@ export function buildAvatar(initial: CharacterParams, figure: FigureId = 'a', le
     }
   }
 
+  /** Leave out the body triangles whose three corners are all under
+   *  a worn garment (the always-worn base layer included), by
+   *  collapsing them in the index. The base layer itself is always
+   *  drawn whole (LEGAL-ETHICS J-10). The probe draws the opposite
+   *  body triangles and marks the covered base-layer vertices. */
+  function applyMask(): void {
+    if (!current) return;
+    if (!probing) maskedCount = 0;
+    for (const { mesh, full, cover } of current.masked) {
+      const isBase = mesh === current.garments.get('base');
+      const index = mesh.geometry.index!;
+      const out = index.array;
+      const flags = [...current.garments].filter(([id, g]) => g.visible && cover.has(id)).map(([id]) => cover.get(id)!);
+      const covered = (i: number) => flags.some((f) => f[i]);
+      if (isBase) {
+        if (!probing) continue;
+        const count = mesh.geometry.getAttribute('position').count;
+        const color = new Float32Array(count * 3);
+        for (let i = 0; i < count; i++) if (covered(i)) color.set([0, 1, 1], 3 * i);
+        mesh.geometry.setAttribute('color', new THREE.BufferAttribute(color, 3));
+        continue;
+      }
+      for (let t = 0; t < full.length; t += 3) {
+        const hidden = covered(full[t]) && covered(full[t + 1]) && covered(full[t + 2]);
+        const drop = probing ? !hidden : hidden;
+        if (hidden && !probing) maskedCount++;
+        out[t] = full[t];
+        out[t + 1] = drop ? full[t] : full[t + 1];
+        out[t + 2] = drop ? full[t] : full[t + 2];
+      }
+      index.needsUpdate = true;
+    }
+  }
+
   function applyGarments(): void {
     if (!current || !worn) return;
     const show = new Set<string>(['base', worn.top]);
@@ -1158,6 +1418,7 @@ export function buildAvatar(initial: CharacterParams, figure: FigureId = 'a', le
     if (worn.bottom !== 'none') color(worn.bottom, worn.bottomColor);
     color(shoe, worn.shoeColor);
     fitCache = null;
+    applyMask();
     const shoeMat = current.materials.get('shoesLow');
     if (shoeMat) {
       // Pumps are patent; flats are a softer leather.

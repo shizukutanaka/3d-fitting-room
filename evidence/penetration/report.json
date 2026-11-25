@@ -1,0 +1,2458 @@
+{
+  "baseLeakMax": 2000,
+  "cells": [
+    {
+      "name": "tee-shorts_baseline_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_baseline_wave",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_baseline_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_baseline_peace",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_baseline_relax",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 1,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_shoulderWidth-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_shoulderWidth-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 4,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_shoulderWidth-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_shoulderWidth-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 4,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_waist-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_waist-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 5,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_waist-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_waist-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_hip-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 1,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_hip-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 5,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_hip-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_hip-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 6,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_bust-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 1,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_bust-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_bust-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_bust-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 6,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_build-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_build-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 4,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_build-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_build-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 4,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_all-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_all-min_wave",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_all-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 1,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_all-min_peace",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_all-min_relax",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_all-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 4,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_all-max_wave",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 8,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_all-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 9,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_all-max_peace",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 8,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "tee-shorts_all-max_relax",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 0,
+        "maskedTriangles": 2857
+      }
+    },
+    {
+      "name": "blouse-skirt_baseline_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 109,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_baseline_wave",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 9,
+        "base": 77,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_baseline_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 7,
+        "base": 37,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_baseline_peace",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 6,
+        "base": 2,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_baseline_relax",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 129,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_shoulderWidth-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 101,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_shoulderWidth-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 6,
+        "base": 34,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_shoulderWidth-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 115,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_shoulderWidth-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 7,
+        "base": 36,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_waist-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 96,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_waist-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 4,
+        "base": 30,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_waist-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 103,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_waist-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 6,
+        "base": 37,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_hip-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 104,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_hip-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 8,
+        "base": 30,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_hip-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 94,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_hip-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 4,
+        "base": 33,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_bust-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 111,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_bust-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 8,
+        "base": 38,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_bust-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 100,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_bust-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 7,
+        "base": 29,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_build-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 105,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_build-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 6,
+        "base": 37,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_build-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 113,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_build-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 7,
+        "base": 30,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_all-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 76,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_all-min_wave",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 1,
+        "base": 63,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_all-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 1,
+        "base": 39,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_all-min_peace",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 10,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_all-min_relax",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 93,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_all-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 4,
+        "base": 124,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_all-max_wave",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 11,
+        "base": 80,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_all-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 11,
+        "base": 30,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_all-max_peace",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 8,
+        "base": 0,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "blouse-skirt_all-max_relax",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 148,
+        "maskedTriangles": 3046
+      }
+    },
+    {
+      "name": "hoodie-pants_baseline_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_baseline_wave",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 1,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_baseline_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_baseline_peace",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_baseline_relax",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_shoulderWidth-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_shoulderWidth-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_shoulderWidth-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_shoulderWidth-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_waist-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_waist-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 1,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_waist-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_waist-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_hip-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_hip-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 1,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_hip-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_hip-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_bust-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_bust-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_bust-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_bust-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_build-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_build-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_build-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_build-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_all-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_all-min_wave",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_all-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_all-min_peace",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_all-min_relax",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_all-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_all-max_wave",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_all-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_all-max_peace",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 4,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "hoodie-pants_all-max_relax",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 0,
+        "maskedTriangles": 4899
+      }
+    },
+    {
+      "name": "dress_baseline_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 13,
+        "base": 1437,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_baseline_wave",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 6,
+        "base": 748,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_baseline_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 7,
+        "base": 19,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_baseline_peace",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 655,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_baseline_relax",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 17,
+        "base": 1442,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_shoulderWidth-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 13,
+        "base": 1432,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_shoulderWidth-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 7,
+        "base": 20,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_shoulderWidth-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 14,
+        "base": 1439,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_shoulderWidth-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 20,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_waist-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 12,
+        "base": 1438,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_waist-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 4,
+        "base": 17,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_waist-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 13,
+        "base": 1440,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_waist-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 18,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_hip-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 10,
+        "base": 1439,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_hip-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 18,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_hip-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 15,
+        "base": 1442,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_hip-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 6,
+        "base": 19,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_bust-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 13,
+        "base": 1439,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_bust-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 7,
+        "base": 22,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_bust-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 12,
+        "base": 1447,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_bust-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 7,
+        "base": 19,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_build-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 13,
+        "base": 1442,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_build-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 7,
+        "base": 18,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_build-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 14,
+        "base": 1440,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_build-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 1,
+        "base": 17,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_all-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 4,
+        "base": 980,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_all-min_wave",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 505,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_all-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 11,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_all-min_peace",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 440,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_all-min_relax",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 8,
+        "base": 957,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_all-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 20,
+        "base": 1820,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_all-max_wave",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 16,
+        "base": 936,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_all-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 17,
+        "base": 22,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_all-max_peace",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 825,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "dress_all-max_relax",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 30,
+        "base": 1817,
+        "maskedTriangles": 1922
+      }
+    },
+    {
+      "name": "tee-jacket-pants_baseline_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_baseline_wave",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_baseline_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_baseline_peace",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 4,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_baseline_relax",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 1,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_shoulderWidth-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_shoulderWidth-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_shoulderWidth-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_shoulderWidth-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 4,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_waist-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_waist-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 5,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_waist-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_waist-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 1,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_hip-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 1,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_hip-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 4,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_hip-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 1,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_hip-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 4,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_bust-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_bust-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_bust-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_bust-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 4,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_build-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 1,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_build-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 4,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_build-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 1,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_build-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 1,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_all-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_all-min_wave",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 1,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_all-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_all-min_peace",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 1,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_all-min_relax",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_all-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 4,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_all-max_wave",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 6,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_all-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 7,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_all-max_peace",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 9,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "tee-jacket-pants_all-max_relax",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 6,
+        "base": 0,
+        "maskedTriangles": 4379
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_baseline_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 94,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_baseline_wave",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 5,
+        "base": 78,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_baseline_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 6,
+        "base": 37,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_baseline_peace",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 5,
+        "base": 3,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_baseline_relax",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 118,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_shoulderWidth-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 85,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_shoulderWidth-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 35,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_shoulderWidth-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 94,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_shoulderWidth-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 7,
+        "base": 32,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_waist-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 82,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_waist-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 6,
+        "base": 30,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_waist-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 90,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_waist-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 7,
+        "base": 38,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_hip-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 90,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_hip-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 6,
+        "base": 29,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_hip-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 86,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_hip-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 4,
+        "base": 34,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_bust-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 96,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_bust-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 5,
+        "base": 34,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_bust-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 86,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_bust-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 8,
+        "base": 31,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_build-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 90,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_build-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 37,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_build-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 1,
+        "base": 94,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_build-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 6,
+        "base": 30,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_all-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 65,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_all-min_wave",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 63,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_all-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 38,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_all-min_peace",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 10,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_all-min_relax",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 86,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_all-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 108,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_all-max_wave",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 11,
+        "base": 83,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_all-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 12,
+        "base": 32,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_all-max_peace",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 11,
+        "base": 0,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "blouse-cardigan-skirtLong_all-max_relax",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 6,
+        "base": 128,
+        "maskedTriangles": 3049
+      }
+    },
+    {
+      "name": "dressLong-coat_baseline_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 284,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_baseline_wave",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 6,
+        "base": 156,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_baseline_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 7,
+        "base": 0,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_baseline_peace",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 11,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_baseline_relax",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 314,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_shoulderWidth-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 294,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_shoulderWidth-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 5,
+        "base": 0,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_shoulderWidth-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 282,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_shoulderWidth-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 4,
+        "base": 0,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_waist-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 1,
+        "base": 285,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_waist-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 0,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_waist-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 297,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_waist-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 6,
+        "base": 0,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_hip-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 283,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_hip-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 5,
+        "base": 0,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_hip-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 295,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_hip-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 5,
+        "base": 0,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_bust-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 291,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_bust-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 5,
+        "base": 0,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_bust-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 284,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_bust-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 5,
+        "base": 0,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_build-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 298,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_build-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 4,
+        "base": 0,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_build-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 3,
+        "base": 279,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_build-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 5,
+        "base": 0,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_all-min_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 209,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_all-min_wave",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 1,
+        "base": 103,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_all-min_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 1,
+        "base": 0,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_all-min_peace",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 2,
+        "base": 12,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_all-min_relax",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 0,
+        "base": 217,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_all-max_stand",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 6,
+        "base": 363,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_all-max_wave",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 11,
+        "base": 193,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_all-max_cheer",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 12,
+        "base": 0,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_all-max_peace",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 10,
+        "base": 9,
+        "maskedTriangles": 2353
+      }
+    },
+    {
+      "name": "dressLong-coat_all-max_relax",
+      "ok": true,
+      "problems": [],
+      "leaks": {
+        "body": 6,
+        "base": 396,
+        "maskedTriangles": 2353
+      }
+    }
+  ],
+  "failed": 0,
+  "worstBase": 1820,
+  "bodyPixelsMasked": 1007
+}

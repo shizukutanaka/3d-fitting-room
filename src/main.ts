@@ -2459,6 +2459,12 @@ interface FittingRoomBridge {
   /** Draw-call measurement from the stage (scene.ts): one
    *  frame with the mirror's reflection pass and without it. */
   measureStageStats(): { withMirror: number; withoutMirror: number; triangles: number; stereo: number };
+  /** Poke-through measurement (avatar.ts probeLeaks): pixels, over
+   *  eight turns of the figure, of body surface that lies under worn
+   *  garments (left out of normal drawing) and of base layer that
+   *  lies under them (drawn), seen from the current camera; and how
+   *  many body triangles the mask currently leaves out. */
+  measureLeaks(): { body: number; base: number; maskedTriangles: number };
   /** VR viewpoint alignment state (bodyscale.ts alignViewpoint). */
   getViewpoint(): { entered: boolean; shownHeightM: number; playerY: number; alignment: ViewpointAlignment | null };
   /** Apply the alignment for a headset height, as the first frames
@@ -2624,6 +2630,29 @@ const bridge: FittingRoomBridge = {
     });
   },
   measureStageStats: () => stage.measureDrawCalls(),
+  measureLeaks: () => {
+    const { renderer, camera } = stage;
+    const gl = renderer.getContext();
+    const px = new Uint8Array(gl.drawingBufferWidth * gl.drawingBufferHeight * 4);
+    const yaw = rig.root.rotation.y;
+    const out = { body: 0, base: 0, maskedTriangles: rig.maskedTriangles() };
+    rig.probeLeaks(true);
+    for (let i = 0; i < 8; i++) {
+      rig.root.rotation.y = yaw + (i * Math.PI) / 4;
+      renderer.render(rig.root, camera);
+      gl.readPixels(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      for (let p = 0; p < px.length; p += 4) {
+        // Magenta is flat; cyan fades across a base-layer triangle
+        // that is only partly under a garment, so half counts.
+        if (px[p] > 250 && px[p + 1] < 5 && px[p + 2] > 250) out.body++;
+        else if (px[p] < 5 && px[p + 1] > 127 && px[p + 2] > 127) out.base++;
+      }
+    }
+    rig.probeLeaks(false);
+    rig.root.rotation.y = yaw;
+    renderer.render(stage.scene, camera);
+    return out;
+  },
   getViewpoint: () => ({ entered: heightEntered, shownHeightM: sessionHeight ?? outfit.character.height, playerY: stage.player.position.y, alignment: viewpoint }),
   simulateHeadsetHeight: (y) => applyViewpoint(y),
   endViewpoint: () => {
